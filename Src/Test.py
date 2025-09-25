@@ -7,4 +7,18 @@ AUTH = ("neo4j", "Test12345")
 with GraphDatabase.driver(URI, auth=AUTH) as driver:
     driver.verify_connectivity()
     print("Connection established.")
-    
+
+
+#Kode fra ChatGPT - for å sjekke om koblingen ble laget.
+driver = GraphDatabase.driver(URI, auth=AUTH)
+
+with driver.session() as session:
+    print("Connection established.")
+
+    # Test-spørring
+    result = session.run("MATCH (p:Person) RETURN p.name AS name")
+
+    for record in result:
+        print("Fant person:", record["name"])
+
+driver.close()
