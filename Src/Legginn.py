@@ -1,151 +1,87 @@
-from neo4j import GraphDatabase
-import json
 import os
+import json
+from neo4j import GraphDatabase
 
-# ------------------------------
-# KONFIGURASJON
-# ------------------------------
-# 🔹 Sett riktig filbane til din lokale JSON-fil:
-BODS_FILE = os.path.expanduser("~/Downloads/test.json")
+# 🔹 Filbane til JSON
+BODS_FILE = r"C:\Users\Admin2\Downloads\test.json"
 
-# 🔹 Neo4j-databasekobling (oppdater passord om nødvendig)
-NEO4J_URI = "bolt://192.168.50.23:7687"
+# 🔹 Neo4j-tilkobling
+NEO4J_URI = "bolt://localhost:7687"
 NEO4J_USER = "neo4j"
-NEO4J_PASS = "password"
+NEO4J_PASSWORD = "test1234"
 
-# ------------------------------
-# SETT OPP DATABASEKOBLING
-# ------------------------------
-driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASS))
+# 🔹 Batch-størrelse for store datasett
+BATCH_SIZE = 1000
 
-# ------------------------------
-# FUNKSJONER
-# ------------------------------
-def create_indexes(tx):
-    """Lag indekser for rask matching."""
-    tx.run("CREATE INDEX person_id IF NOT EXISTS FOR (p:Person) ON (p.statementID)")
-    tx.run("CREATE INDEX entity_id IF NOT EXISTS FOR (e:Entity) ON (e.statementID)")
-    tx.run("CREATE INDEX stmt_id IF NOT EXISTS FOR (s:OwnershipOrControlStatement) ON (s.statementID)")
+# 🔹 Les JSON-fil (liste eller linje-per-linje)
+def read_json_objects(file_path):
+    objects = []
+    with open(file_path, "r", encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+            if isinstance(data, dict):
+                objects.append(data)
+            elif isinstance(data, list):
+                objects.extend(data)
+            else:
+                print("Ukjent JSON-format")
+        except json.JSONDecodeError:
+            f.seek(0)
+            for line_number, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                    objects.append(obj)
+                except json.JSONDecodeError as e:
+                    print(f"Ugyldig JSON på linje {line_number}: {line}\n  {e}")
+    return objects
 
+# 🔹 Rekursiv flattening: konverterer alle dicts til JSON-strenger
+def flatten_object_recursive(obj):
+    if isinstance(obj, dict):
+        new_obj = {}
+        for k, v in obj.items():
+            if isinstance(v, dict) or isinstance(v, list):
+                new_obj[k] = json.dumps(v)
+            else:
+                new_obj[k] = v
+        return new_obj
+    else:
+        return obj
 
-def load_bods_statement(tx, stmt):
-    stype = stmt.get("statementType")
-    sid = stmt.get("statementID")
+# 🔹 Sett inn noder batchvis
+def insert_nodes(driver, objects, label="Person"):
+    with driver.session() as session:
+        total = len(objects)
+        for start in range(0, total, BATCH_SIZE):
+            batch = objects[start:start+BATCH_SIZE]
+            tx = session.begin_transaction()
+            for obj in batch:
+                obj_flat = flatten_object_recursive(obj)
+                keys = obj_flat.keys()
+                props = ", ".join([f"{k}: ${k}" for k in keys])
+                query = f"CREATE (n:{label} {{ {props} }})"
+                tx.run(query, **obj_flat)
+            tx.commit()
+            print(f"Batch {start}–{start+len(batch)-1} lagt inn")
 
-    # ------------------ PERSON ------------------
-    if stype == "personStatement":
-        person_name = stmt.get("names", [{}])[0].get("fullName", "Unknown")
-        nationality = stmt.get("nationalities", [""])[0]
-        tx.run("""
-            MERGE (p:Person {statementID: $sid})
-            SET p.name = $name, p.nationality = $nat
-        """, sid=sid, name=person_name, nat=nationality)
+# 🔹 Hovedprogram
+if __name__ == "__main__":
+    if not os.path.exists(BODS_FILE):
+        print(f"Filen finnes ikke: {BODS_FILE}")
+        exit(1)
 
-        # Identifiers
-        for ident in stmt.get("identifiers", []):
-            scheme = ident.get("schemeName", "")
-            val = ident.get("id", "")
-            tx.run("""
-                MERGE (i:Identifier {id: $val, scheme: $scheme})
-                MERGE (p:Person {statementID: $sid})-[:HAS_IDENTIFIER]->(i)
-            """, sid=sid, val=val, scheme=scheme)
+    print(f"Filen ble funnet: {BODS_FILE}")
 
-        # Addresses
-        for addr in stmt.get("addresses", []):
-            full_addr = addr.get("address", "")
-            country = addr.get("country", "")
-            tx.run("""
-                MERGE (a:Address {address: $addr, country: $country})
-                MERGE (p:Person {statementID: $sid})-[:HAS_ADDRESS]->(a)
-            """, sid=sid, addr=full_addr, country=country)
+    json_objects = read_json_objects(BODS_FILE)
+    print(f"Totalt objekter å legge inn: {len(json_objects)}")
 
-    # ------------------ ENTITY ------------------
-    elif stype == "entityStatement":
-        entity_name = stmt.get("name", "Unknown")
-        country = stmt.get("incorporatedInJurisdiction", {}).get("code", "")
-        tx.run("""
-            MERGE (e:Entity {statementID: $sid})
-            SET e.name = $name, e.country = $country
-        """, sid=sid, name=entity_name, country=country)
-
-        # Identifiers
-        for ident in stmt.get("identifiers", []):
-            scheme = ident.get("schemeName", "")
-            val = ident.get("id", "")
-            tx.run("""
-                MERGE (i:Identifier {id: $val, scheme: $scheme})
-                MERGE (e:Entity {statementID: $sid})-[:HAS_IDENTIFIER]->(i)
-            """, sid=sid, val=val, scheme=scheme)
-
-        # Addresses
-        for addr in stmt.get("addresses", []):
-            full_addr = addr.get("address", "")
-            country = addr.get("country", "")
-            tx.run("""
-                MERGE (a:Address {address: $addr, country: $country})
-                MERGE (e:Entity {statementID: $sid})-[:HAS_ADDRESS]->(a)
-            """, sid=sid, addr=full_addr, country=country)
-
-    # ------------------ OWNERSHIP OR CONTROL ------------------
-    elif stype == "ownershipOrControlStatement":
-        tx.run("""
-            MERGE (o:OwnershipOrControlStatement {statementID: $sid})
-            SET o.type = $stype, o.statementDate = $date
-        """, sid=sid, stype=stype, date=stmt.get("statementDate"))
-
-        # Link interestedParty → statement
-        party = stmt.get("interestedParty", {}).get("describedByStatement")
-        if party:
-            tx.run("""
-                MATCH (p {statementID: $pid}), (o:OwnershipOrControlStatement {statementID: $sid})
-                MERGE (p)-[:IS_SUBJECT_OF]->(o)
-            """, pid=party, sid=sid)
-
-        # Link subject (the company)
-        subject = stmt.get("subject", {}).get("describedByStatement")
-        if subject:
-            tx.run("""
-                MATCH (e {statementID: $eid}), (o:OwnershipOrControlStatement {statementID: $sid})
-                MERGE (o)-[:HOLDS_INTEREST_IN]->(e)
-            """, eid=subject, sid=sid)
-
-        # Interests
-        for intr in stmt.get("interests", []):
-            itype = intr.get("type", "")
-            share = intr.get("shareExact") or intr.get("shareMinimum")
-            tx.run("""
-                MERGE (i:Interest {type: $itype, share: $share})
-                MERGE (o:OwnershipOrControlStatement {statementID: $sid})-[:HAS_INTEREST]->(i)
-            """, sid=sid, itype=itype, share=share)
-
-        # Source
-        for src in stmt.get("source", []):
-            sname = src.get("publisher", "")
-            surl = src.get("url", "")
-            tx.run("""
-                MERGE (s:Source {url: $url})
-                SET s.publisher = $publisher
-                MERGE (o:OwnershipOrControlStatement {statementID: $sid})-[:REPORTED_BY]->(s)
-            """, sid=sid, publisher=sname, url=surl)
-
-
-# ------------------------------
-# LAST INN DATA FRA LOKAL FIL
-# ------------------------------
-if not os.path.exists(BODS_FILE):
-    raise FileNotFoundError(f"Fant ikke filen: {BODS_FILE}")
-
-with driver.session() as session:
-    session.execute_write(create_indexes)
-
-    with open(BODS_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    statements = data.get("statements", [])
-    print(f"🔹 Importerer {len(statements)} statements fra {BODS_FILE}...")
-
-    for stmt in statements:
-        session.execute_write(load_bods_statement, stmt)
-
-driver.close()
-print("✅ Ferdig! Alle BODS-data er importert fra lokal JSON-fil til Neo4j.")
+    if not json_objects:
+        print("Ingen objekter funnet i filen.")
+    else:
+        driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        insert_nodes(driver, json_objects, label="Person")
+        driver.close()
+        print("Alle objekter lagt inn i Neo4j.")
