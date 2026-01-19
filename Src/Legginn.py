@@ -29,7 +29,7 @@ def parse_share(value):
 # ========================
 URI = "bolt://localhost:7687"
 AUTH = ("neo4j", "test1234")
-FILE_PATH = r"F:\OpenOwnership full fil\register.json"
+FILE_PATH = r"F:\10 tusen\10000.json"
 
 BATCH_SIZE = 2000
 LOG_EVERY = 10000
@@ -115,7 +115,8 @@ def import_person_to_firma(tx, batch):
            r.share_maximum = obj.share_maximum,
            r.share_exact   = obj.share_exact,
            r.startDate     = obj.startDate,
-           r.endDate       = obj.endDate
+           r.endDate       = obj.endDate,
+           r.type          = obj.type
     """, batch=batch)
 
 def import_firma_to_firma(tx, batch):
@@ -130,7 +131,8 @@ def import_firma_to_firma(tx, batch):
            r.share_maximum = obj.share_maximum,
            r.share_exact   = obj.share_exact,
            r.startDate     = obj.startDate,
-           r.endDate       = obj.endDate
+           r.endDate       = obj.endDate,
+           r.type          = obj.type
     """, batch=batch)
 
 # ========================
@@ -241,8 +243,9 @@ def stream_import():
                         share_min = parse_share(share.get("minimum")) or 0
                         share_max = parse_share(share.get("maximum")) or 0
                         share_ex  = parse_share(share.get("exact"))   or 0
-                        startDate = interest.get("startDate") or None
-                        endDate = interest.get("endDate") or None 
+                        startDate = interest.get("startDate")
+                        endDate = interest.get("endDate") 
+                        type = interest.get("type") 
 
                         interest_subject = interest.get("subject", {})
                         interest_firma_id = interest_subject.get("describedByEntityStatement") or firma_id
@@ -253,11 +256,12 @@ def stream_import():
                                 "statementID": sid,
                                 "personID": person_id,
                                 "firmaID": interest_firma_id,
-                                "startDate": startDate or None,
-                                "share_minimum": share_min if share_min is not None else 0,
-                                "share_maximum": share_max if share_max is not None else 0,
-                                "share_exact": share_ex if share_ex is not None else 0,
-                                "endDate": endDate or None,
+                                "startDate": startDate,
+                                "share_minimum": share_min,
+                                "share_maximum": share_max,
+                                "share_exact": share_ex,
+                                "endDate": endDate,
+                                "type": type,
                                 "statementDate": statementDate
                             })
 
@@ -268,10 +272,11 @@ def stream_import():
                                 "fromFirmaID": from_firma_id,
                                 "toFirmaID": interest_firma_id,
                                 "startDate": startDate,
-                                "share_minimum": share_min if share_min is not None else 0,     
-                                "share_maximum": share_max if share_max is not None else 0,
-                                "share_exact": share_ex if share_ex is not None else 0,
+                                "share_minimum": share_min,     
+                                "share_maximum": share_max,
+                                "share_exact": share_ex,
                                 "endDate": endDate,
+                                "type": type,
                                 "statementDate": statementDate
                             })
 
