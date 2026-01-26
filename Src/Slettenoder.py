@@ -5,7 +5,7 @@ from datetime import datetime
 # KONFIG
 # ========================
 URI = "bolt://localhost:7687"
-AUTH = ("neo4j", "test1234")
+AUTH = ("neo4j", "Test1234")
 BATCH_SIZE = 2000   # antall noder per batch
 # ========================
 

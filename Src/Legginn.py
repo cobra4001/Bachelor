@@ -86,7 +86,9 @@ def import_persons(tx, batch):
             p.birthDate     = COALESCE(obj.birthDate, p.birthDate),
             p.type          = COALESCE(obj.type, p.type),
             p.personType    = COALESCE(obj.personType, p.personType),
-            p.statementDate = COALESCE(obj.statementDate, p.statementDate)
+            p.code    = COALESCE(obj.code, p.code),
+            p.name    = COALESCE(obj.name, p.name)
+           
     """, batch=batch)
 
 def import_firmas(tx, batch):
@@ -167,6 +169,7 @@ def stream_import():
                     sid = obj.get("statementID")
                     names = obj.get("names", [])
                     name = names[0] if names else {}
+                    nationalites = obj.get("nationalities", [])
 
                     person_batch.append({
                         "personID": sid,
@@ -176,7 +179,8 @@ def stream_import():
                         "type": name.get("type"),
                         "birthDate": obj.get("birthDate"),
                         "personType": obj.get("personType"),
-                        "statementDate": obj.get("statementDate")
+                        "code": nationalites.get("code"),
+                        "name": nationalites.get("name")
                     })
 
                     if len(person_batch) >= BATCH_SIZE:
@@ -203,6 +207,43 @@ def stream_import():
                             s.execute_write(import_firmas, firma_batch)
                         count_firmas += len(firma_batch)
                         firma_batch.clear()
+
+
+                # ---------------- Adresse ----------------
+
+
+
+
+
+
+
+
+
+                # ---------------- Register ----------------
+
+
+
+
+
+                # ---------------- EntityStatement ----------------
+
+
+
+                # ---------------- PersonStatement ----------------
+
+
+
+
+
+                # ---------------- OOCStatement ----------------
+
+
+
+
+
+                # ---------------- Identifier ----------------
+ 
+
 
                 # ---------------- RELASJONER ----------------
                 elif stype == "ownershipOrControlStatement":
