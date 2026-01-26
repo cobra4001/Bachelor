@@ -88,8 +88,8 @@ def import_persons(tx, batch):
             p.birthDate     = COALESCE(obj.birthDate, p.birthDate),
             p.type          = COALESCE(obj.type, p.type),
             p.personType    = COALESCE(obj.personType, p.personType),
-            p.code    = COALESCE(obj.code, p.code),
-            p.name    = COALESCE(obj.name, p.name)
+            p.CountryCode = COALESCE(obj.Countrycode, p.CountryCode),
+            p.Country = COALESCE(obj.Country, p.Country)
            
     """, batch=batch)
 
@@ -100,8 +100,13 @@ def import_firmas(tx, batch):
         MERGE (f:Firma {ident: obj.firmaID})
         SET
             f.name    = COALESCE(obj.name, f.name),
-            f.address = COALESCE(obj.adress, f.address),
-            f.county  = COALESCE(obj.county, f.county)
+            f.alternateNames = COALESCE(obj.alternateNames, f.alternateNames),
+            f.entityType = COALESCE(obj.entityType, f.entityType),  
+            f.foundingDate = COALESCE(obj.foundingDate, f.foundingDate),
+            f.incorporatedInJurisdiction_name = COALESCE(obj.incorporatedInJurisdiction_name, f.incorporatedInJurisdiction_name),
+            f.incorporatedInJurisdiction_code = COALESCE(obj.incorporatedInJurisdiction_code, f.incorporatedInJurisdiction_code),
+            f.dissolutionDate = COALESCE(obj.dissolutionDate, f.dissolutionDate)
+     
     """, batch=batch)
 
 # ---------------- Adresse ----------------
@@ -235,6 +240,7 @@ def stream_import():
                     names = obj.get("names", [])
                     name = names[0] if names else {}
                     nationalites = obj.get("nationalities", [])
+                    national = nationalites[0] if nationalites else {}
 
                     person_batch.append({
                         "personID": sid,
@@ -244,8 +250,8 @@ def stream_import():
                         "type": name.get("type"),
                         "birthDate": obj.get("birthDate"),
                         "personType": obj.get("personType"),
-                        "code": nationalites.get("code"),
-                        "name": nationalites.get("name")
+                        "Countrycode": national.get("code"),
+                        "Country": national.get("name")
                     })
 
                     if len(person_batch) >= BATCH_SIZE:
@@ -263,8 +269,13 @@ def stream_import():
                     firma_batch.append({
                         "firmaID": sid,
                         "name": obj.get("name"),
-                        "adress": addr.get("address"),
-                        "county": addr.get("country")
+                        "alternateNames": obj.get("alternateNames"),
+                        "entityType": obj.get("entityType"),
+                        "foundingDate": obj.get("foundingDate"),
+                        "incorporatedInJurisdiction_name": obj.get("incorporatedInJurisdiction", {}).get("name"),
+                        "incorporatedInJurisdiction_code": obj.get("incorporatedInJurisdiction", {}).get("code"),
+                        "dissolutionDate": obj.get("dissolutionDate")
+
                     })
 
                     if len(firma_batch) >= BATCH_SIZE:
