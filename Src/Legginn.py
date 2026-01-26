@@ -75,6 +75,8 @@ def create_constraints(session):
 # ========================
 # NODE IMPORT
 # ========================
+
+# ---------------- PERSON ----------------
 def import_persons(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -91,6 +93,7 @@ def import_persons(tx, batch):
            
     """, batch=batch)
 
+# ---------------- Firma ----------------
 def import_firmas(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -101,9 +104,46 @@ def import_firmas(tx, batch):
             f.county  = COALESCE(obj.county, f.county)
     """, batch=batch)
 
+# ---------------- Adresse ----------------
+
+
+
+
+
+
+
+
+# ---------------- Register ----------------
+
+
+
+
+
+# ---------------- EntityStatement ----------------
+
+
+
+# ---------------- PersonStatement ----------------
+
+
+
+
+
+# ---------------- OOCStatement ----------------
+
+
+
+
+
+# ---------------- Identifier ----------------
+
+
 # ========================
 # RELASJONER 
 # ========================
+
+# --------------Person_interested_in_Firma ----------------
+
 def import_person_to_firma(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -121,6 +161,8 @@ def import_person_to_firma(tx, batch):
            r.type          = obj.type
     """, batch=batch)
 
+# ----------------Firma_Interessert_i_Firma ----------------
+
 def import_firma_to_firma(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -136,6 +178,29 @@ def import_firma_to_firma(tx, batch):
            r.endDate       = obj.endDate,
            r.type          = obj.type
     """, batch=batch)
+
+# ---------------- Has_Adress  ----------------
+
+
+
+# ---------------- Describes_Entity ----------------
+
+
+
+# ---------------- Describes_Person ----------------
+
+
+
+# ---------------- Has_Identifier ----------------
+
+
+
+# ---------------- Published_By ----------------
+
+
+
+# ---------------- Is_Interested_Party ----------------
+
 
 # ========================
 # IMPORT
