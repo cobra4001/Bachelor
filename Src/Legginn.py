@@ -76,6 +76,25 @@ def create_constraints(session):
 # NODE IMPORT
 # ========================
 
+
+# ---------------- PERSONSTATEMENT ----------------
+def import_person_statements(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MERGE (ps:PersonStatement {statementID: obj.statementID})
+        SET
+            ps.personType    = COALESCE(obj.personType, ps.personType),
+            ps.statementType = COALESCE(obj.statementType, ps.statementType),
+            ps.isComponent   = COALESCE(obj.isComponent, ps.isComponent),
+            ps.statementDate = COALESCE(obj.statementDate, ps.statementDate),
+            ps.pub_bodsVersion = COALESCE(obj.publicationDetails_bodsVersion, ps.pub_bodsVersion),
+            ps.pub_license    = COALESCE(obj.publicationDetails_license, ps.pub_license),
+            ps.pub_date       = COALESCE(obj.publicationDetails_publicationDate, ps.pub_date),
+            ps.pub_publisher_name = COALESCE(obj.publicationDetails_publisher_name, ps.pub_publisher_name),
+            ps.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, ps.pub_publisher_url)
+    """, batch=batch)
+
+
 # ---------------- PERSON ----------------
 def import_persons(tx, batch):
     tx.run("""
@@ -88,9 +107,8 @@ def import_persons(tx, batch):
             p.birthDate     = COALESCE(obj.birthDate, p.birthDate),
             p.type          = COALESCE(obj.type, p.type),
             p.personType    = COALESCE(obj.personType, p.personType),
-            p.CountryCode = COALESCE(obj.Countrycode, p.CountryCode),
-            p.Country = COALESCE(obj.Country, p.Country)
-           
+            p.CountryCode   = COALESCE(obj.Countrycode, p.CountryCode),
+            p.Country       = COALESCE(obj.Country, p.Country)
     """, batch=batch)
 
 # ---------------- Person Adresse ----------------
@@ -113,60 +131,26 @@ def import_firmas(tx, batch):
             f.incorporatedInJurisdiction_name = COALESCE(obj.incorporatedInJurisdiction_name, f.incorporatedInJurisdiction_name),
             f.incorporatedInJurisdiction_code = COALESCE(obj.incorporatedInJurisdiction_code, f.incorporatedInJurisdiction_code),
             f.dissolutionDate = COALESCE(obj.dissolutionDate, f.dissolutionDate)
-     
     """, batch=batch)
 
 # ---------------- Firma Adresse ----------------
-
 def import_firma_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
     """, batch=batch)
 
-
-
-
-
-
-# ---------------- Register ----------------
-
-
-
-
-
-# ---------------- EntityStatement ----------------
-
-
-
-# ---------------- PersonStatement ----------------
-
-
-
-
-
-# ---------------- OOCStatement ----------------
-
-
-
-
-
-# ---------------- Identifier ----------------
-
-
 # ========================
 # RELASJONER 
 # ========================
 
 # --------------Person_interested_in_Firma ----------------
-
 def import_person_to_firma(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MERGE (p:Person {ident: obj.personID})
         MERGE (f:Firma  {ident: obj.firmaID})
         MERGE (p)-[r:TILFIRMA {statementID: obj.statementID}]->(f)
-
         SET
            r.statementDate = COALESCE(obj.statementDate, r.statementDate),
            r.share_minimum = obj.share_minimum,
@@ -178,7 +162,6 @@ def import_person_to_firma(tx, batch):
     """, batch=batch)
 
 # ----------------Firma_Interessert_i_Firma ----------------
-
 def import_firma_to_firma(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -195,50 +178,20 @@ def import_firma_to_firma(tx, batch):
            r.type          = obj.type
     """, batch=batch)
 
-# ---------------- Person Adresse  ----------------
-
-
-
-
-# ---------------- Firma Adresse ----------------
-
-
-
-
-# ---------------- Describes_Person ----------------
-
-
-
-# ---------------- Has_Identifier ----------------
-
-
-
-# ---------------- Published_By ----------------
-
-
-
-# ---------------- Is_Interested_Party ----------------
-
-
 # ========================
 # IMPORT
 # ========================
 def stream_import():
     start_time = datetime.now()
-
+    personStatement_batch = []
     person_batch = []
     personaddress_batch = []
-    firmaaddress_batch = []
     firma_batch = []
+    firmaaddress_batch = []
     rel_person_batch = []
     rel_firma_batch = []
 
     teller_total = 0
-    count_persons = 0
-    count_addresses = 0
-    count_firmas = 0
-    count_rel_person = 0
-    count_rel_firma = 0
 
     with driver.session() as session:
         create_constraints(session)
@@ -250,9 +203,24 @@ def stream_import():
                 continue
 
             try:
-                # ---------------- PERSON ----------------
+                # ---------------- PERSONSTATEMENT ----------------
                 if stype == "personStatement":
                     sid = obj.get("statementID")
+
+                    personStatement_batch.append({
+                        "statementID": sid,
+                        "personType": obj.get("personType"),
+                        "statementType": obj.get("statementType"),
+                        "isComponent": obj.get("isComponent"),
+                        "statementDate": obj.get("statementDate"),
+                        "publicationDetails_bodsVersion": obj.get("publicationDetails", {}).get("bodsVersion"),
+                        "publicationDetails_license": obj.get("publicationDetails", {}).get("license"),
+                        "publicationDetails_publicationDate": obj.get("publicationDetails", {}).get("publicationDate"),
+                        "publicationDetails_publisher_name": obj.get("publicationDetails", {}).get("publisher", {}).get("name"),
+                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
+                    })
+
+                # ---------------- PERSON ----------------
                     names = obj.get("names", [])
                     name = names[0] if names else {}
                     nationalites = obj.get("nationalities", [])
@@ -270,34 +238,33 @@ def stream_import():
                         "Country": national.get("name")
                     })
 
-                     # ---------------- Person adresse ----------------
+                    # ---------------- Person adresse ----------------
                     addresses = obj.get("addresses", [])
                     for addr in addresses:
-                         if not addr.get("address"):
-                             continue # Hopp over tomme adresser
-                         personaddress_batch.append({
-                                "personID": sid,
-                                "address": addr.get("address"),
-                                "country": addr.get("country"),
-                                "type": addr.get("type"),
-                            })
+                        if not addr.get("address"):
+                            continue
+                        personaddress_batch.append({
+                            "personID": sid,
+                            "address": addr.get("address"),
+                            "country": addr.get("country"),
+                            "type": addr.get("type"),
+                        })
 
+                    # Flush person batch
                     if len(person_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_persons, person_batch)
-                        count_persons += len(person_batch)
                         person_batch.clear()
 
+                    # Flush person addresses
                     if len(personaddress_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_person_addresses, personaddress_batch)
-                        count_addresses += len(personaddress_batch)
                         personaddress_batch.clear()
 
                 # ---------------- FIRMA ----------------
                 elif stype == "entityStatement":
                     sid = obj.get("statementID")
-                
                     firma_batch.append({
                         "firmaID": sid,
                         "name": obj.get("name"),
@@ -307,77 +274,41 @@ def stream_import():
                         "incorporatedInJurisdiction_name": obj.get("incorporatedInJurisdiction", {}).get("name"),
                         "incorporatedInJurisdiction_code": obj.get("incorporatedInJurisdiction", {}).get("code"),
                         "dissolutionDate": obj.get("dissolutionDate")
-
                     })
 
                     # ---------------- FIRMA adresse ----------------
-
                     addresses = obj.get("addresses", [])
                     for addr in addresses:
-                         if not addr.get("address"):
-                             continue # Hopp over tomme adresser
-                         firmaaddress_batch.append({
-                                "firmaID": sid,
-                                "address": addr.get("address"),
-                                "country": addr.get("country"),
-                                "type": addr.get("type"),
-                            })
+                        if not addr.get("address"):
+                            continue
+                        firmaaddress_batch.append({
+                            "firmaID": sid,
+                            "address": addr.get("address"),
+                            "country": addr.get("country"),
+                            "type": addr.get("type"),
+                        })
 
+                    # Flush firma batch
                     if len(firma_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_firmas, firma_batch)
-                        count_firmas += len(firma_batch)
                         firma_batch.clear()
 
+                    # Flush firma addresses
                     if len(firmaaddress_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_firma_addresses, firmaaddress_batch)
-                        count_addresses += len(firmaaddress_batch)
                         firmaaddress_batch.clear()
-                
-
-
-
-
-
-
-                # ---------------- Register ----------------
-
-
-
-
-
-                # ---------------- EntityStatement ----------------
-
-
-
-                # ---------------- PersonStatement ----------------
-
-
-
-
-
-                # ---------------- OOCStatement ----------------
-
-
-
-
-
-                # ---------------- Identifier ----------------
- 
-
 
                 # ---------------- RELASJONER ----------------
                 elif stype == "ownershipOrControlStatement":
                     sid = obj.get("statementID")
                     statementDate = obj.get("statementDate")
-
-                    # Hovedperson → firma relasjon
                     person_id = obj.get("interestedParty", {}).get("describedByPersonStatement")
                     firma_id = obj.get("subject", {}).get("describedByEntityStatement")
                     from_firma_id = obj.get("interestedParty", {}).get("describedByEntityStatement")
 
-                    # ---------------- Hovedrelasjoner ----------------
+                    # Person → Firma relasjon
                     if person_id and firma_id:
                         rel_person_batch.append({
                             "statementID": sid,
@@ -389,6 +320,7 @@ def stream_import():
                             "statementDate": statementDate
                         })
 
+                    # Firma → Firma relasjon
                     if from_firma_id and firma_id:
                         rel_firma_batch.append({
                             "statementID": sid,
@@ -400,20 +332,18 @@ def stream_import():
                             "statementDate": statementDate
                         })
 
-                    # ---------------- Interests med aksjer ----------------
+                    # Interests
                     for interest in obj.get("interests", []):
                         share = interest.get("share", {})
                         share_min = parse_share(share.get("minimum")) or 0
                         share_max = parse_share(share.get("maximum")) or 0
-                        share_ex  = parse_share(share.get("exact"))   or 0
+                        share_ex  = parse_share(share.get("exact")) or 0
                         startDate = interest.get("startDate")
                         endDate = interest.get("endDate") 
                         type = interest.get("type") 
-
                         interest_subject = interest.get("subject", {})
                         interest_firma_id = interest_subject.get("describedByEntityStatement") or firma_id
 
-                        # Person → Firma fra interest
                         if person_id and interest_firma_id:
                             rel_person_batch.append({
                                 "statementID": sid,
@@ -427,8 +357,6 @@ def stream_import():
                                 "type": type,
                                 "statementDate": statementDate
                             })
-
-                        # Firma → Firma fra interest
                         if from_firma_id and interest_firma_id:
                             rel_firma_batch.append({
                                 "statementID": sid,
@@ -443,61 +371,62 @@ def stream_import():
                                 "statementDate": statementDate
                             })
 
+                    # Flush relasjoner
                     if len(rel_person_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_person_to_firma, rel_person_batch)
-                        count_rel_person += len(rel_person_batch)
                         rel_person_batch.clear()
-
                     if len(rel_firma_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_firma_to_firma, rel_firma_batch)
-                        count_rel_firma += len(rel_firma_batch)
                         rel_firma_batch.clear()
 
                 teller_total += 1
 
                 if teller_total % LOG_EVERY == 0:
-                    print(
-                        f"{teller_total} objects | "
-                        f"Δt: {datetime.now() - start_time}"
-                    )
+                    print(f"{teller_total} objects | Δt: {datetime.now() - start_time}")
                     start_time = datetime.now()
 
             except Exception as e:
                 print(f"🚨 ERROR at object {teller_total}: {e}")
 
-    # ---------------- FLUSH ----------------
+    # ---------------- FLUSH REST ----------------
     with driver.session() as s:
         if person_batch:
             s.execute_write(import_persons, person_batch)
-            count_persons += len(person_batch)
+        if personStatement_batch:
+            s.execute_write(import_person_statements, personStatement_batch)
         if personaddress_batch:
             s.execute_write(import_person_addresses, personaddress_batch)
-            count_addresses += len(personaddress_batch)    
         if firma_batch:
             s.execute_write(import_firmas, firma_batch)
-            count_firmas += len(firma_batch)
         if firmaaddress_batch:
             s.execute_write(import_firma_addresses, firmaaddress_batch)
-            count_addresses += len(firmaaddress_batch)    
         if rel_person_batch:
             s.execute_write(import_person_to_firma, rel_person_batch)
-            count_rel_person += len(rel_person_batch)
         if rel_firma_batch:
             s.execute_write(import_firma_to_firma, rel_firma_batch)
-            count_rel_firma += len(rel_firma_batch)
 
-    # ---------------- TOTAL ----------------
-    print("🎉 Import ferdig!")
-    print(f"Totalt prosessert objekter: {teller_total}")
-    print(f"Person nodes: {count_persons}")
-    print(f"Address nodes: {count_addresses}")
-    print(f"Firma nodes: {count_firmas}")
-    print(f"Person → Firma relasjoner: {count_rel_person}")
-    print(f"Firma → Firma relasjoner: {count_rel_firma}")
+    # ---------------- RETURN TELLERE ----------------
+    with driver.session() as s:
+        personstatement_count = s.run("MATCH (ps:PersonStatement) RETURN count(ps) AS c").single()["c"]
+        person_count = s.run("MATCH (p:Person) RETURN count(p) AS c").single()["c"]
+        firma_count = s.run("MATCH (f:Firma) RETURN count(f) AS c").single()["c"]
+        address_count = s.run("MATCH (a:Address) RETURN count(a) AS c").single()["c"]
+        rel_pf_count = s.run("MATCH (:Person)-[r:TILFIRMA]->(:Firma) RETURN count(r) AS c").single()["c"]
+
+    return teller_total,personstatement_count, person_count, firma_count, address_count, rel_pf_count
+
 
 # ========================
 # KJØR
 # ========================
-stream_import()
+teller_total, ps, p, f, a, r = stream_import()
+
+print("🎉 Import ferdig!")
+print(f"Totalt prosessert objekter: {teller_total}")
+print(f"PersonStatement-noder: {ps}")
+print(f"Person-noder: {p}")
+print(f"Firma-noder: {f}")
+print(f"Address-noder: {a}")
+print(f"Person → Firma relasjoner: {r}")
