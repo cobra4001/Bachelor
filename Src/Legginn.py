@@ -115,7 +115,7 @@ def import_persons(tx, batch):
 def import_person_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+        MERGE (a:Adresse {address: obj.address, country: obj.country, type: obj.type})
     """, batch=batch)
 
 # ---------------- Firma ----------------
@@ -133,11 +133,11 @@ def import_firmas(tx, batch):
             f.dissolutionDate = COALESCE(obj.dissolutionDate, f.dissolutionDate)
     """, batch=batch)
 
-# ---------------- Firma Adresse ----------------
+# ---------------- Firma adresse ----------------
 def import_firma_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+        MERGE (a:Adresse {address: obj.address, country: obj.country, type: obj.type})
     """, batch=batch)
 
 # ========================
@@ -428,5 +428,5 @@ print(f"Totalt prosessert objekter: {teller_total}")
 print(f"PersonStatement-noder: {ps}")
 print(f"Person-noder: {p}")
 print(f"Firma-noder: {f}")
-print(f"Address-noder: {a}")
+print(f"Adresse-noder: {a}")
 print(f"Person → Firma relasjoner: {r}")
