@@ -27,8 +27,8 @@ def parse_share(value):
 # ========================
 # KONFIG
 # ========================
-URI = "bolt://localhost:7687"
-AUTH = ("neo4j", "test1234")
+URI = "bolt://10.196.241.255:7687"
+AUTH = ("neo4j", "mRTzP1@h")
 FILE_PATH = r"F:\10 tusen\10000.json"
 
 BATCH_SIZE = 2000
@@ -93,6 +93,13 @@ def import_persons(tx, batch):
            
     """, batch=batch)
 
+# ---------------- Person Adresse ----------------
+def import_person_addresses(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+    """, batch=batch)
+
 # ---------------- Firma ----------------
 def import_firmas(tx, batch):
     tx.run("""
@@ -109,9 +116,13 @@ def import_firmas(tx, batch):
      
     """, batch=batch)
 
-# ---------------- Adresse ----------------
+# ---------------- Firma Adresse ----------------
 
-
+def import_firma_addresses(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+    """, batch=batch)
 
 
 
@@ -184,11 +195,13 @@ def import_firma_to_firma(tx, batch):
            r.type          = obj.type
     """, batch=batch)
 
-# ---------------- Has_Adress  ----------------
+# ---------------- Person Adresse  ----------------
 
 
 
-# ---------------- Describes_Entity ----------------
+
+# ---------------- Firma Adresse ----------------
+
 
 
 
@@ -214,12 +227,15 @@ def stream_import():
     start_time = datetime.now()
 
     person_batch = []
+    personaddress_batch = []
+    firmaaddress_batch = []
     firma_batch = []
     rel_person_batch = []
     rel_firma_batch = []
 
     teller_total = 0
     count_persons = 0
+    count_addresses = 0
     count_firmas = 0
     count_rel_person = 0
     count_rel_firma = 0
@@ -254,18 +270,34 @@ def stream_import():
                         "Country": national.get("name")
                     })
 
+                     # ---------------- Person adresse ----------------
+                    addresses = obj.get("addresses", [])
+                    for addr in addresses:
+                         if not addr.get("address"):
+                             continue # Hopp over tomme adresser
+                         personaddress_batch.append({
+                                "personID": sid,
+                                "address": addr.get("address"),
+                                "country": addr.get("country"),
+                                "type": addr.get("type"),
+                            })
+
                     if len(person_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_persons, person_batch)
                         count_persons += len(person_batch)
                         person_batch.clear()
 
+                    if len(personaddress_batch) >= BATCH_SIZE:
+                        with driver.session() as s:
+                            s.execute_write(import_person_addresses, personaddress_batch)
+                        count_addresses += len(personaddress_batch)
+                        personaddress_batch.clear()
+
                 # ---------------- FIRMA ----------------
                 elif stype == "entityStatement":
                     sid = obj.get("statementID")
-                    addresses = obj.get("addresses", [])
-                    addr = addresses[0] if addresses else {}
-
+                
                     firma_batch.append({
                         "firmaID": sid,
                         "name": obj.get("name"),
@@ -278,17 +310,31 @@ def stream_import():
 
                     })
 
+                    # ---------------- FIRMA adresse ----------------
+
+                    addresses = obj.get("addresses", [])
+                    for addr in addresses:
+                         if not addr.get("address"):
+                             continue # Hopp over tomme adresser
+                         firmaaddress_batch.append({
+                                "firmaID": sid,
+                                "address": addr.get("address"),
+                                "country": addr.get("country"),
+                                "type": addr.get("type"),
+                            })
+
                     if len(firma_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_firmas, firma_batch)
                         count_firmas += len(firma_batch)
                         firma_batch.clear()
 
-
-                # ---------------- Adresse ----------------
-
-
-
+                    if len(firmaaddress_batch) >= BATCH_SIZE:
+                        with driver.session() as s:
+                            s.execute_write(import_firma_addresses, firmaaddress_batch)
+                        count_addresses += len(firmaaddress_batch)
+                        firmaaddress_batch.clear()
+                
 
 
 
@@ -426,9 +472,15 @@ def stream_import():
         if person_batch:
             s.execute_write(import_persons, person_batch)
             count_persons += len(person_batch)
+        if personaddress_batch:
+            s.execute_write(import_person_addresses, personaddress_batch)
+            count_addresses += len(personaddress_batch)    
         if firma_batch:
             s.execute_write(import_firmas, firma_batch)
             count_firmas += len(firma_batch)
+        if firmaaddress_batch:
+            s.execute_write(import_firma_addresses, firmaaddress_batch)
+            count_addresses += len(firmaaddress_batch)    
         if rel_person_batch:
             s.execute_write(import_person_to_firma, rel_person_batch)
             count_rel_person += len(rel_person_batch)
@@ -440,6 +492,7 @@ def stream_import():
     print("🎉 Import ferdig!")
     print(f"Totalt prosessert objekter: {teller_total}")
     print(f"Person nodes: {count_persons}")
+    print(f"Address nodes: {count_addresses}")
     print(f"Firma nodes: {count_firmas}")
     print(f"Person → Firma relasjoner: {count_rel_person}")
     print(f"Firma → Firma relasjoner: {count_rel_firma}")
