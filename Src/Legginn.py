@@ -115,15 +115,43 @@ def import_persons(tx, batch):
 def import_person_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (a:Adresse {address: obj.address, country: obj.country, type: obj.type})
+        MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+    """, batch=batch)
+
+# ---------------- Person Kilde ----------------
+
+def import_person_sources(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        // Bare merge hvis url finnes
+        WITH obj WHERE obj.url IS NOT NULL
+        MERGE (so:Source {url: obj.url})
+        SET
+            so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
+            so.description = COALESCE(obj.description, so.description),
+            so.retrievedAt = COALESCE(obj.retrievedAt, so.retrievedAt),
+            so.type        = COALESCE(obj.type, so.type),
+            so.url         = COALESCE(obj.url, so.url)
+    """, batch=batch)
+
+
+# ---------------- Person identifier ----------------
+def import_person_identifiers(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MERGE (i:Identifier {uri: obj.uri})
+        SET
+            i.id = COALESCE(obj.id, i.id),
+            i.schemeName = COALESCE(obj.schemeName, i.schemeName),
+            i.uri = COALESCE(obj.uri, i.uri)
     """, batch=batch)
 
 
 # ---------------- FIRMASTATEMENT ----------------
-def import_firma_statements(tx, batch):
+def import_entity_statements(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (fs:FirmaStatement {statementID: obj.statementID})
+        MERGE (fs:EntityStatement {statementID: obj.statementID})
         SET
             fs.replacesStatements = COALESCE(obj.replacesStatements, fs.replacesStatements),
             fs.statementType   = COALESCE(obj.statementType, fs.statementType),
@@ -137,10 +165,10 @@ def import_firma_statements(tx, batch):
     """, batch=batch)
 
 # ---------------- Firma ----------------
-def import_firmas(tx, batch):
+def import_entitys(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (f:Firma {ident: obj.firmaID})
+        MERGE (f:Entity {ident: obj.firmaID})
         SET
             f.name    = COALESCE(obj.name, f.name),
             f.alternateNames = COALESCE(obj.alternateNames, f.alternateNames),
@@ -149,6 +177,40 @@ def import_firmas(tx, batch):
             f.incorporatedInJurisdiction_name = COALESCE(obj.incorporatedInJurisdiction_name, f.incorporatedInJurisdiction_name),
             f.incorporatedInJurisdiction_code = COALESCE(obj.incorporatedInJurisdiction_code, f.incorporatedInJurisdiction_code),
             f.dissolutionDate = COALESCE(obj.dissolutionDate, f.dissolutionDate)
+    """, batch=batch)
+
+# ---------------- Firma adresse ----------------
+def import_entity_addresses(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+    """, batch=batch)
+
+# ---------------- Firma Kilde ----------------
+def import_entity_sources(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        // Sikkerhet: bare merge hvis url finnes
+        WITH obj WHERE obj.url IS NOT NULL
+        MERGE (so:Source {url: obj.url})
+        SET
+            so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
+            so.description = COALESCE(obj.description, so.description),
+            so.retrievedAt = COALESCE(obj.retrievedAt, so.retrievedAt),
+            so.type        = COALESCE(obj.type, so.type),
+            so.url         = COALESCE(obj.url, so.url)
+    """, batch=batch)
+
+# ---------------- Firma Identifier ----------------
+def import_entity_identifiers(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MERGE (i:Identifier {uri: obj.uri})
+        SET
+            i.id = COALESCE(obj.id, i.id),
+            i.scheme = COALESCE(obj.scheme, i.scheme),
+            i.schemeName = COALESCE(obj.schemeName, i.schemeName),
+            i.uri = COALESCE(obj.uri, i.uri)
     """, batch=batch)
 
 # ---------------- OOCStatement ----------------
@@ -168,12 +230,21 @@ def import_OOC_statements(tx, batch):
             os.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, os.pub_publisher_url)
     """, batch=batch)
 
-# ---------------- Firma adresse ----------------
-def import_firma_addresses(tx, batch):
+# ---------------- OOCStatement kilde ----------------
+def import_OOC_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (a:Adresse {address: obj.address, country: obj.country, type: obj.type})
+        // Bare merge hvis url finnes
+        WITH obj WHERE obj.url IS NOT NULL
+        MERGE (so:Source {url: obj.url})
+        SET
+            so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
+            so.description = COALESCE(obj.description, so.description),
+            so.retrievedAt = COALESCE(obj.retrievedAt, so.retrievedAt),
+            so.type        = COALESCE(obj.type, so.type),
+            so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
+
 
 # ========================
 # RELASJONER 
@@ -221,10 +292,15 @@ def stream_import():
     personStatement_batch = []
     person_batch = []
     personaddress_batch = []
-    firmaStatement_batch = []
-    firma_batch = []
-    firmaaddress_batch = []
+    personsource_batch = []
+    personidentifier_batch = []
+    entityStatement_batch = []
+    entity_batch = []
+    entityaddress_batch = []
+    entitysource_batch = []
+    entityidentifier_batch = []
     OOCStatement_batch = []
+    OOCStatementsource_batch = []
     rel_person_batch = []
     rel_firma_batch = []
 
@@ -258,14 +334,14 @@ def stream_import():
                         "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
                     })
 
-                # ---------------- PERSON ----------------
+                    # ---------------- PERSON ----------------
                     names = obj.get("names", [])
                     name = names[0] if names else {}
                     nationalites = obj.get("nationalities", [])
                     national = nationalites[0] if nationalites else {}
 
                     person_batch.append({
-                        "personID": sid,
+                        "personID": sid,  # statementID fungerer som unik kobling
                         "fullName": name.get("fullName"),
                         "givenName": name.get("givenName"),
                         "familyName": name.get("familyName"),
@@ -282,11 +358,34 @@ def stream_import():
                         if not addr.get("address"):
                             continue
                         personaddress_batch.append({
-                            "personID": sid,
+                            "personID": sid,  # kobling til statement
                             "address": addr.get("address"),
                             "country": addr.get("country"),
                             "type": addr.get("type"),
                         })
+
+                    # ---------------- PersonStatement kilde ----------------
+                    source = obj.get("source")
+                    if source and source.get("url"):
+                        personsource_batch.append({
+                            "statementID": sid,  # kobling til statementen
+                            "assertedBy": source.get("assertedBy"),
+                            "description": source.get("description"),
+                            "retrievedAt": source.get("retrievedAt"),
+                            "type": source.get("type"),
+                            "url": source.get("url"),
+                        })
+
+                    # ---------------- PersonStatement identifier ----------------
+                    identifiers = obj.get("identifiers", [])
+                    for ident in identifiers:
+                        if ident.get("uri"):  # bare ta med de som har URI
+                            personidentifier_batch.append({
+                                "id": ident.get("id"),
+                                "schemeName": ident.get("schemeName"),
+                                "uri": ident.get("uri"),
+                                "statementID": sid  # kobling til statement
+                            })
 
                     # Flush personstatement batch
                     if len(personStatement_batch) >= BATCH_SIZE:
@@ -306,12 +405,30 @@ def stream_import():
                             s.execute_write(import_person_addresses, personaddress_batch)
                         personaddress_batch.clear()
 
+                    # Flush person sources
+                    if len(personsource_batch) >= BATCH_SIZE:
+                        with driver.session() as s:
+                            s.execute_write(import_person_sources, personsource_batch)
+                        personsource_batch.clear()    
+
                 # ---------------- FIRMA ----------------
                 elif stype == "entityStatement":
                     sid = obj.get("statementID")
+
+                    # Hent firmaets unike ID
+                    identifiers = obj.get("identifiers", [])
+                    entity_id = None
+                    for ident in identifiers:
+                        if ident.get("uri"):
+                            entity_id = ident.get("uri")
+                            break
+
+                    # fallback til statementID hvis ingen URI finnes
+                    if not entity_id:
+                        entity_id = obj.get("statementID")
                 
                     # ---------------- FIRMASTATEMENT ----------------
-                    firmaStatement_batch.append({
+                    entityStatement_batch.append({
                         "statementID": sid,
                         "replacesStatements": obj.get("replacesStatements"),
                         "statementType": obj.get("statementType"),
@@ -326,8 +443,8 @@ def stream_import():
 
 
                       # ---------------- FIRMA ----------------
-                    firma_batch.append({
-                        "firmaID": sid,
+                    entity_batch.append({
+                        "entityID": entity_id,
                         "name": obj.get("name"),
                         "alternateNames": obj.get("alternateNames"),
                         "entityType": obj.get("entityType"),
@@ -342,31 +459,65 @@ def stream_import():
                     for addr in addresses:
                         if not addr.get("address"):
                             continue
-                        firmaaddress_batch.append({
-                            "firmaID": sid,
+                        entityaddress_batch.append({
+                            "entityID": entity_id,
                             "address": addr.get("address"),
                             "country": addr.get("country"),
                             "type": addr.get("type"),
                         })
 
+                    # ---------------- FirmaStatement kilde ----------------
+
+                    source = obj.get("source")
+
+                    if source and source.get("url"):
+                        entitysource_batch.append({
+                            "statementID": sid,
+                            "assertedBy": source.get("assertedBy"),
+                            "description": source.get("description"),
+                            "retrievedAt": source.get("retrievedAt"),
+                            "type": source.get("type"),
+                            "url": source.get("url"),
+                        })
+
+
+
+                    # ---------------- FirmaStatement identifier ----------------
+
+                    identifiers = obj.get("identifiers", [])
+                    for ident in identifiers:
+                        if ident.get("uri"):  # bare ta med de som har URI
+                            entityidentifier_batch.append({
+                                "id": ident.get("id"),
+                                "scheme": ident.get("scheme"),
+                                "schemeName": ident.get("schemeName"),
+                                "uri": ident.get("uri"),
+                                "entity_id": entity_id
+                            })
+
                     # Flush firmastatement batch
-                    if len(firmaStatement_batch) >= BATCH_SIZE:
+                    if len(entityStatement_batch) >= BATCH_SIZE:
                         with driver.session() as s:
-                            s.execute_write(import_firma_statements, firmaStatement_batch)
-                        firmaStatement_batch.clear()
+                            s.execute_write(import_entity_statements, entityStatement_batch)
+                        entityStatement_batch.clear()
 
                     # Flush firma batch
-                    if len(firma_batch) >= BATCH_SIZE:
+                    if len(entity_batch) >= BATCH_SIZE:
                         with driver.session() as s:
-                            s.execute_write(import_firmas, firma_batch)
-                        firma_batch.clear()
+                            s.execute_write(import_entitys, entity_batch)
+                        entity_batch.clear()
 
                     # Flush firma addresses
-                    if len(firmaaddress_batch) >= BATCH_SIZE:
+                    if len(entityaddress_batch) >= BATCH_SIZE:
                         with driver.session() as s:
-                            s.execute_write(import_firma_addresses, firmaaddress_batch)
-                        firmaaddress_batch.clear()
+                            s.execute_write(import_entity_addresses, entityaddress_batch)
+                        entityaddress_batch.clear()
 
+                    # Flush firma sources
+                    if len(entitysource_batch) >= BATCH_SIZE:
+                        with driver.session() as s:
+                            s.execute_write(import_entity_sources, entitysource_batch)
+                        entitysource_batch.clear()
 
                 # ---------------- OOCStatement ----------------
                 elif stype == "ownershipOrControlStatement":
@@ -385,11 +536,33 @@ def stream_import():
                         "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
                     })
 
+
+                    # ---------------- OOCStatement kilde ----------------
+
+                    source = obj.get("source")
+
+                    if source and source.get("url"):
+                        OOCStatementsource_batch.append({
+                            "assertedBy": source.get("assertedBy"),
+                            "description": source.get("description"),
+                            "retrievedAt": source.get("retrievedAt"),
+                            "type": source.get("type"),
+                            "url": source.get("url"),
+                        })
+
+
                     # Flush OOCStatement batch
                     if len(OOCStatement_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_OOC_statements, OOCStatement_batch)
                         OOCStatement_batch.clear()
+
+                    
+                    # Flush OOCStatement kilde
+                    if len(OOCStatementsource_batch) >= BATCH_SIZE:
+                        with driver.session() as s:
+                            s.execute_write(import_OOC_sources, OOCStatementsource_batch)
+                        OOCStatementsource_batch.clear()
 
                 # ---------------- RELASJONER ----------------
                 elif stype == "ownershipOrControlStatement":
@@ -404,7 +577,7 @@ def stream_import():
                         rel_person_batch.append({
                             "statementID": sid,
                             "personID": person_id,
-                            "firmaID": firma_id,
+                            "entityID": firma_id,
                             "share_minimum": 0,
                             "share_maximum": 0,
                             "share_exact": 0,
@@ -415,8 +588,8 @@ def stream_import():
                     if from_firma_id and firma_id:
                         rel_firma_batch.append({
                             "statementID": sid,
-                            "fromFirmaID": from_firma_id,
-                            "toFirmaID": firma_id,
+                            "fromEntityID": from_firma_id,
+                            "toEntityID": firma_id,
                             "share_minimum": 0,
                             "share_maximum": 0,
                             "share_exact": 0,
@@ -483,20 +656,30 @@ def stream_import():
 
     # ---------------- FLUSH REST ----------------
     with driver.session() as s:
-        if person_batch:
-            s.execute_write(import_persons, person_batch)
         if personStatement_batch:
             s.execute_write(import_person_statements, personStatement_batch)
+        if person_batch:
+            s.execute_write(import_persons, person_batch)
         if personaddress_batch:
             s.execute_write(import_person_addresses, personaddress_batch)
-        if firmaStatement_batch:
-            s.execute_write(import_firma_statements, firmaStatement_batch)    
-        if firma_batch:
-            s.execute_write(import_firmas, firma_batch)
-        if firmaaddress_batch:
-            s.execute_write(import_firma_addresses, firmaaddress_batch)
+        if entityStatement_batch:
+            s.execute_write(import_entity_statements, entityStatement_batch)
+        if personsource_batch:
+            s.execute_write(import_person_sources, personsource_batch)
+        if personidentifier_batch:
+            s.execute_write(import_person_identifiers, personidentifier_batch)      
+        if entity_batch:
+            s.execute_write(import_entitys, entity_batch)
+        if entityaddress_batch:
+            s.execute_write(import_entity_addresses, entityaddress_batch)
+        if entitysource_batch:
+            s.execute_write(import_entity_sources, entitysource_batch)    
+        if entityidentifier_batch:
+            s.execute_write(import_entity_identifiers, entityidentifier_batch)   
         if OOCStatement_batch:
-            s.execute_write(import_OOC_statements, OOCStatement_batch)    
+            s.execute_write(import_OOC_statements, OOCStatement_batch)
+        if OOCStatementsource_batch:
+            s.execute_write(import_OOC_sources, OOCStatementsource_batch)        
         if rel_person_batch:
             s.execute_write(import_person_to_firma, rel_person_batch)
         if rel_firma_batch:
@@ -505,25 +688,28 @@ def stream_import():
     # ---------------- RETURN TELLERE ----------------
     with driver.session() as s:
         personstatement_count = s.run("MATCH (ps:PersonStatement) RETURN count(ps) AS c").single()["c"]
+        entitystatement_count = s.run("MATCH (fs:EntityStatement) RETURN count(fs) AS c").single()["c"]
+        ownershiporcontrolstatement_count = s.run("MATCH (os:OOCStatement) RETURN count(os) AS c").single()["c"]
         person_count = s.run("MATCH (p:Person) RETURN count(p) AS c").single()["c"]
-        firmastatement_count = s.run("MATCH (fs:FirmaStatement) RETURN count(fs) AS c").single()["c"]
-        firma_count = s.run("MATCH (f:Firma) RETURN count(f) AS c").single()["c"]
-        address_count = s.run("MATCH (a:Adresse) RETURN count(a) AS c").single()["c"]
-        ownershiporcontrolstatement_count = s.run("MATCH (o:OOCStatement) RETURN count(o) AS c").single()["c"]
+        entity_count = s.run("MATCH (f:Entity) RETURN count(f) AS c").single()["c"]
+        address_count = s.run("MATCH (a:Address) RETURN count(a) AS c").single()["c"]
+        identifier_count = s.run("MATCH (i:Identifier) RETURN count(i) AS c").single()["c"]
+        source_count = s.run("MATCH (so:Source) RETURN count(so) AS c").single()["c"]
 
-    return teller_total,personstatement_count, person_count, firmastatement_count, firma_count, address_count, ownershiporcontrolstatement_count
-
+    return teller_total, personstatement_count, entitystatement_count, ownershiporcontrolstatement_count, person_count, entity_count, address_count, identifier_count, source_count
 
 # ========================
 # KJØR
 # ========================
-teller_total, ps, fs, ooc, p, f, a, ooc = stream_import()
+teller_total, ps, fs, osc, p, f, a, i, so = stream_import()
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
 print(f"PersonStatement-noder: {ps}")
-print(f"FirmaStatement-noder: {fs}")
-print(f"OOCStatement-noder: {ooc}")
+print(f"EntityStatement-noder: {fs}")
+print(f"OOCStatement-noder: {osc}")
 print(f"Person-noder: {p}")
-print(f"Firma-noder: {f}")
+print(f"Entity-noder: {f}")
 print(f"Adresse-noder: {a}")
+print(f"identifier-noder: {i}")
+print(f"Source-noder: {so}")
