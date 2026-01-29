@@ -118,6 +118,30 @@ def import_person_addresses(tx, batch):
         MERGE (a:Adresse {address: obj.address, country: obj.country, type: obj.type})
     """, batch=batch)
 
+
+# ---------------- FIRMASTATEMENT ----------------
+def import_firma_statements(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MERGE (fs:FirmaStatement {statementID: obj.statementID})
+        SET
+            fs.replacesStatements = COALESCE(obj.replacesStatements, fs.replacesStatements),
+            fs.statementType   = COALESCE(obj.statementType, fs.statementType),
+            fs.isComponent = COALESCE(obj.isComponent, fs.isComponent),
+            fs.statementDate = COALESCE(obj.statementDate, fs.statementDate),
+            fs.pub_bodsVersion = COALESCE(obj.publicationDetails_bodsVersion, fs.pub_bodsVersion),
+            fs.pub_license    = COALESCE(obj.publicationDetails_license, fs.pub_license),
+            fs.pub_date       = COALESCE(obj.publicationDetails_publicationDate, fs.pub_date),
+            fs.pub_publisher_name = COALESCE(obj.publicationDetails_publisher_name, fs.pub_publisher_name),
+            fs.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, fs.pub_publisher_url)
+    """, batch=batch)
+
+
+
+
+
+
+
 # ---------------- Firma ----------------
 def import_firmas(tx, batch):
     tx.run("""
@@ -186,6 +210,7 @@ def stream_import():
     personStatement_batch = []
     person_batch = []
     personaddress_batch = []
+    firmaStatement_batch = []
     firma_batch = []
     firmaaddress_batch = []
     rel_person_batch = []
@@ -212,6 +237,7 @@ def stream_import():
                         "personType": obj.get("personType"),
                         "statementType": obj.get("statementType"),
                         "isComponent": obj.get("isComponent"),
+                        "replacesStatements": obj.get("replacesStatements"),
                         "statementDate": obj.get("statementDate"),
                         "publicationDetails_bodsVersion": obj.get("publicationDetails", {}).get("bodsVersion"),
                         "publicationDetails_license": obj.get("publicationDetails", {}).get("license"),
@@ -250,6 +276,12 @@ def stream_import():
                             "type": addr.get("type"),
                         })
 
+                    # Flush personstatement batch
+                    if len(personStatement_batch) >= BATCH_SIZE:
+                        with driver.session() as s:
+                            s.execute_write(import_person_statements, personStatement_batch)
+                        personStatement_batch.clear()
+
                     # Flush person batch
                     if len(person_batch) >= BATCH_SIZE:
                         with driver.session() as s:
@@ -265,6 +297,23 @@ def stream_import():
                 # ---------------- FIRMA ----------------
                 elif stype == "entityStatement":
                     sid = obj.get("statementID")
+                
+                    # ---------------- FIRMASTATEMENT ----------------
+                    firmaStatement_batch.append({
+                        "statementID": sid,
+                        "replacesStatements": obj.get("replacesStatements"),
+                        "statementType": obj.get("statementType"),
+                        "isComponent": obj.get("isComponent"),
+                        "statementDate": obj.get("statementDate"),
+                        "publicationDetails_bodsVersion": obj.get("publicationDetails", {}).get("bodsVersion"),
+                        "publicationDetails_license": obj.get("publicationDetails", {}).get("license"),
+                        "publicationDetails_publicationDate": obj.get("publicationDetails", {}).get("publicationDate"),
+                        "publicationDetails_publisher_name": obj.get("publicationDetails", {}).get("publisher", {}).get("name"),
+                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
+                    })
+
+
+                      # ---------------- FIRMA ----------------
                     firma_batch.append({
                         "firmaID": sid,
                         "name": obj.get("name"),
@@ -287,6 +336,12 @@ def stream_import():
                             "country": addr.get("country"),
                             "type": addr.get("type"),
                         })
+
+                    # Flush firmastatement batch
+                    if len(firmaStatement_batch) >= BATCH_SIZE:
+                        with driver.session() as s:
+                            s.execute_write(import_firma_statements, firmaStatement_batch)
+                        firmaStatement_batch.clear()
 
                     # Flush firma batch
                     if len(firma_batch) >= BATCH_SIZE:
@@ -398,6 +453,8 @@ def stream_import():
             s.execute_write(import_person_statements, personStatement_batch)
         if personaddress_batch:
             s.execute_write(import_person_addresses, personaddress_batch)
+        if firmaStatement_batch:
+            s.execute_write(import_firma_statements, firmaStatement_batch)    
         if firma_batch:
             s.execute_write(import_firmas, firma_batch)
         if firmaaddress_batch:
@@ -411,22 +468,22 @@ def stream_import():
     with driver.session() as s:
         personstatement_count = s.run("MATCH (ps:PersonStatement) RETURN count(ps) AS c").single()["c"]
         person_count = s.run("MATCH (p:Person) RETURN count(p) AS c").single()["c"]
+        firmastatement_count = s.run("MATCH (fs:FirmaStatement) RETURN count(fs) AS c").single()["c"]
         firma_count = s.run("MATCH (f:Firma) RETURN count(f) AS c").single()["c"]
-        address_count = s.run("MATCH (a:Address) RETURN count(a) AS c").single()["c"]
-        rel_pf_count = s.run("MATCH (:Person)-[r:TILFIRMA]->(:Firma) RETURN count(r) AS c").single()["c"]
+        address_count = s.run("MATCH (a:Adresse) RETURN count(a) AS c").single()["c"]
 
-    return teller_total,personstatement_count, person_count, firma_count, address_count, rel_pf_count
+    return teller_total,personstatement_count, person_count, firmastatement_count, firma_count, address_count
 
 
 # ========================
 # KJØR
 # ========================
-teller_total, ps, p, f, a, r = stream_import()
+teller_total, ps, p, fs, f, a = stream_import()
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
 print(f"PersonStatement-noder: {ps}")
 print(f"Person-noder: {p}")
+print(f"FirmaStatement-noder: {fs}")
 print(f"Firma-noder: {f}")
 print(f"Adresse-noder: {a}")
-print(f"Person → Firma relasjoner: {r}")
