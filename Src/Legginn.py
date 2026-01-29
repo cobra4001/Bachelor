@@ -136,12 +136,6 @@ def import_firma_statements(tx, batch):
             fs.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, fs.pub_publisher_url)
     """, batch=batch)
 
-
-
-
-
-
-
 # ---------------- Firma ----------------
 def import_firmas(tx, batch):
     tx.run("""
@@ -155,6 +149,23 @@ def import_firmas(tx, batch):
             f.incorporatedInJurisdiction_name = COALESCE(obj.incorporatedInJurisdiction_name, f.incorporatedInJurisdiction_name),
             f.incorporatedInJurisdiction_code = COALESCE(obj.incorporatedInJurisdiction_code, f.incorporatedInJurisdiction_code),
             f.dissolutionDate = COALESCE(obj.dissolutionDate, f.dissolutionDate)
+    """, batch=batch)
+
+# ---------------- OOCStatement ----------------
+def import_OOC_statements(tx, batch): 
+    tx.run("""
+        UNWIND $batch AS obj
+        MERGE (os:OOCStatement {statementID: obj.statementID})   
+        SET
+            os.statementType = COALESCE(obj.statementType, os.statementType),
+            os.statementDate = COALESCE(obj.statementDate, os.statementDate),
+            os.isComponent   = COALESCE(obj.isComponent, os.isComponent),
+            os.interestedParty_describedByPersonStatement = COALESCE(obj.interestedParty_describedByPersonStatement, os.interestedParty_describedByPersonStatement),
+            os.pub_bodsVersion = COALESCE(obj.publicationDetails_bodsVersion, os.pub_bodsVersion),
+            os.pub_license    = COALESCE(obj.publicationDetails_license, os.pub_license),
+            os.pub_date       = COALESCE(obj.publicationDetails_publicationDate, os.pub_date),
+            os.pub_publisher_name = COALESCE(obj.publicationDetails_publisher_name, os.pub_publisher_name),
+            os.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, os.pub_publisher_url)
     """, batch=batch)
 
 # ---------------- Firma adresse ----------------
@@ -213,6 +224,7 @@ def stream_import():
     firmaStatement_batch = []
     firma_batch = []
     firmaaddress_batch = []
+    OOCStatement_batch = []
     rel_person_batch = []
     rel_firma_batch = []
 
@@ -355,6 +367,30 @@ def stream_import():
                             s.execute_write(import_firma_addresses, firmaaddress_batch)
                         firmaaddress_batch.clear()
 
+
+                # ---------------- OOCStatement ----------------
+                elif stype == "ownershipOrControlStatement":
+                    sid = obj.get("statementID")
+
+                    OOCStatement_batch.append({
+                        "statementID": sid,
+                        "statementType": obj.get("statementType"),
+                        "statementDate": obj.get("statementDate"),
+                        "isComponent": obj.get("isComponent"),
+                        "interestedParty_describedByPersonStatement": obj.get("interestedParty", {}).get("describedByPersonStatement"),
+                        "publicationDetails_bodsVersion": obj.get("publicationDetails", {}).get("bodsVersion"),
+                        "publicationDetails_license": obj.get("publicationDetails", {}).get("license"),
+                        "publicationDetails_publicationDate": obj.get("publicationDetails", {}).get("publicationDate"),
+                        "publicationDetails_publisher_name": obj.get("publicationDetails", {}).get("publisher", {}).get("name"),
+                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
+                    })
+
+                    # Flush OOCStatement batch
+                    if len(OOCStatement_batch) >= BATCH_SIZE:
+                        with driver.session() as s:
+                            s.execute_write(import_OOC_statements, OOCStatement_batch)
+                        OOCStatement_batch.clear()
+
                 # ---------------- RELASJONER ----------------
                 elif stype == "ownershipOrControlStatement":
                     sid = obj.get("statementID")
@@ -459,6 +495,8 @@ def stream_import():
             s.execute_write(import_firmas, firma_batch)
         if firmaaddress_batch:
             s.execute_write(import_firma_addresses, firmaaddress_batch)
+        if OOCStatement_batch:
+            s.execute_write(import_OOC_statements, OOCStatement_batch)    
         if rel_person_batch:
             s.execute_write(import_person_to_firma, rel_person_batch)
         if rel_firma_batch:
@@ -471,19 +509,21 @@ def stream_import():
         firmastatement_count = s.run("MATCH (fs:FirmaStatement) RETURN count(fs) AS c").single()["c"]
         firma_count = s.run("MATCH (f:Firma) RETURN count(f) AS c").single()["c"]
         address_count = s.run("MATCH (a:Adresse) RETURN count(a) AS c").single()["c"]
+        ownershiporcontrolstatement_count = s.run("MATCH (o:OOCStatement) RETURN count(o) AS c").single()["c"]
 
-    return teller_total,personstatement_count, person_count, firmastatement_count, firma_count, address_count
+    return teller_total,personstatement_count, person_count, firmastatement_count, firma_count, address_count, ownershiporcontrolstatement_count
 
 
 # ========================
 # KJØR
 # ========================
-teller_total, ps, p, fs, f, a = stream_import()
+teller_total, ps, fs, ooc, p, f, a, ooc = stream_import()
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
 print(f"PersonStatement-noder: {ps}")
-print(f"Person-noder: {p}")
 print(f"FirmaStatement-noder: {fs}")
+print(f"OOCStatement-noder: {ooc}")
+print(f"Person-noder: {p}")
 print(f"Firma-noder: {f}")
 print(f"Adresse-noder: {a}")
