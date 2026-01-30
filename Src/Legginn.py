@@ -314,11 +314,62 @@ def import_firma_to_OOC(tx, batch):
         MATCH (os:OOCStatement {statementID: obj.oocID})
         MERGE (f)-[:IS_INTERESTED_PARTY]->(os)
     """, batch=batch)
+    # Person → OOCStatement → Firma
+def import_person_to_OOC_interest(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MATCH (p:Person {ident: obj.personID})
+        MATCH (os:OOCStatement {statementID: obj.oocID})
+        MERGE (p)-[:IS_INTERESTED_PARTY]->(os)
+        WITH os, obj
+        MATCH (f:Entity {ident: obj.firmaID})
+        MERGE (os)-[r:INTEREST_IN]->(f)
+        SET r.share_minimum = obj.share_minimum,
+            r.share_maximum = obj.share_maximum,
+            r.share_exact = obj.share_exact,
+            r.startDate = obj.startDate,
+            r.endDate = obj.endDate,
+            r.type = obj.type,
+            r.statementDate = obj.statementDate
+    """, batch=batch)
 
+# Firma → OOCStatement → Firma
+def import_firma_to_OOC_interest(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MATCH (f1:Entity {ident: obj.firmaID})
+        MATCH (os:OOCStatement {statementID: obj.oocID})
+        MERGE (f1)-[:IS_INTERESTED_PARTY]->(os)
+        WITH os, obj
+        MATCH (f2:Entity {ident: obj.toFirmaID})
+        MERGE (os)-[r:INTEREST_IN]->(f2)
+        SET r.share_minimum = obj.share_minimum,
+            r.share_maximum = obj.share_maximum,
+            r.share_exact = obj.share_exact,
+            r.startDate = obj.startDate,
+            r.endDate = obj.endDate,
+            r.type = obj.type,
+            r.statementDate = obj.statementDate
+    """, batch=batch)
 
-# ========================
-# RELASJONER 
-# ========================
+    # Firma → OOCStatement → Firma
+def import_firma_to_OOC_interest(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MATCH (f1:Entity {ident: obj.firmaID})
+        MATCH (os:OOCStatement {statementID: obj.oocID})
+        MERGE (f1)-[:IS_INTERESTED_PARTY]->(os)
+        WITH os, obj
+        MATCH (f2:Entity {ident: obj.toFirmaID})
+        MERGE (os)-[r:INTEREST_IN]->(f2)
+        SET r.share_minimum = obj.share_minimum,
+            r.share_maximum = obj.share_maximum,
+            r.share_exact = obj.share_exact,
+            r.startDate = obj.startDate,
+            r.endDate = obj.endDate,
+            r.type = obj.type,
+            r.statementDate = obj.statementDate
+    """, batch=batch)
 
 
 
@@ -591,6 +642,7 @@ def stream_import():
                 # ---------------- OOCStatement ----------------
                 elif stype == "ownershipOrControlStatement":
                     sid = obj.get("statementID")
+                    statementDate = obj.get("statementDate")
 
                     OOCStatement_batch.append({
                         "statementID": sid,
@@ -620,10 +672,70 @@ def stream_import():
                             "firmaID": firma_node_id,     # dette er Entity.ident (statementID)
                             "oocID": sid
                         })
-
-
-
-
+                    # ---------------- OOCStatement → Firma med aksjer ----------------
+                    rel_person_to_OOC_batch = []
+                    rel_firma_to_OOC_batch = []
+ 
+                    # Hvem er interessert i dette OOCStatement?
+                    person_node_id = obj.get("interestedParty", {}).get("describedByPersonStatement")
+                    from_firma_id = obj.get("interestedParty", {}).get("describedByEntityStatement")
+                    
+                    # Hvem er subject i dette OOCStatement?
+                    firma_id = obj.get("subject", {}).get("describedByEntityStatement")
+                    
+                    # Lag relasjon fra person/firma til OOCStatement
+                    if person_node_id:
+                        person_to_OOC_batch.append({
+                            "personID": person_node_id,
+                            "oocID": sid
+                        })
+                    if from_firma_id:
+                        firma_to_OOC_batch.append({
+                            "firmaID": from_firma_id,
+                            "oocID": sid
+                        })
+                    
+                    # Interests → OOCStatement → Firma
+                    for interest in obj.get("interests", []):
+                        share = interest.get("share", {})
+                        share_min = parse_share(share.get("minimum")) or 0
+                        share_max = parse_share(share.get("maximum")) or 0
+                        share_ex  = parse_share(share.get("exact")) or 0
+                        startDate = interest.get("startDate")
+                        endDate = interest.get("endDate") 
+                        type = interest.get("type") 
+                        interest_subject = interest.get("subject", {})
+                        interest_firma_id = interest_subject.get("describedByEntityStatement") or firma_id
+                        
+                        # Person → OOCStatement → Firma
+                        if person_node_id and interest_firma_id:
+                            rel_person_to_OOC_batch.append({
+                                "personID": person_node_id,   # Person.ident
+                                "oocID": sid,                 # OOCStatement.statementID
+                                "firmaID": interest_firma_id, # Firma.ident
+                                "startDate": startDate,
+                                "share_minimum": share_min,
+                                "share_maximum": share_max,
+                                "share_exact": share_ex,
+                                "endDate": endDate,
+                                "type": type,
+                                "statementDate": statementDate
+                            })
+                        
+                        # Firma → OOCStatement → Firma
+                        if from_firma_id and interest_firma_id:
+                            rel_firma_to_OOC_batch.append({
+                                "firmaID": from_firma_id,      # Firma.ident
+                                "oocID": sid,                  # OOCStatement.statementID
+                                "toFirmaID": interest_firma_id,# Firma.ident
+                                "startDate": startDate,
+                                "share_minimum": share_min,
+                                "share_maximum": share_max,
+                                "share_exact": share_ex,
+                                "endDate": endDate,
+                                "type": type,
+                                "statementDate": statementDate
+                            })
                     # ---------------- OOCStatement kilde ----------------
 
                     source = obj.get("source")
@@ -679,88 +791,18 @@ def stream_import():
                            with driver.session() as s:
                                s.execute_write(import_firma_to_OOC, firma_to_OOC_batch)
                            firma_to_OOC_batch.clear()
-
-
-                # ---------------- RELASJONER ----------------
-                elif stype == "ownershipOrControlStatement":
-                    sid = obj.get("statementID")
-                    statementDate = obj.get("statementDate")
-                    person_id = obj.get("interestedParty", {}).get("describedByPersonStatement")
-                    firma_id = obj.get("subject", {}).get("describedByEntityStatement")
-                    from_firma_id = obj.get("interestedParty", {}).get("describedByEntityStatement")
-
-                    # Person → Firma relasjon
-                    if person_id and firma_id:
-                        rel_person_batch.append({
-                            "statementID": sid,
-                            "personID": person_id,
-                            "entityID": firma_id,
-                            "share_minimum": 0,
-                            "share_maximum": 0,
-                            "share_exact": 0,
-                            "statementDate": statementDate
-                        })
-
-                    # Firma → Firma relasjon
-                    if from_firma_id and firma_id:
-                        rel_firma_batch.append({
-                            "statementID": sid,
-                            "fromEntityID": from_firma_id,
-                            "toEntityID": firma_id,
-                            "share_minimum": 0,
-                            "share_maximum": 0,
-                            "share_exact": 0,
-                            "statementDate": statementDate
-                        })
-
-                    # Interests
-                    for interest in obj.get("interests", []):
-                        share = interest.get("share", {})
-                        share_min = parse_share(share.get("minimum")) or 0
-                        share_max = parse_share(share.get("maximum")) or 0
-                        share_ex  = parse_share(share.get("exact")) or 0
-                        startDate = interest.get("startDate")
-                        endDate = interest.get("endDate") 
-                        type = interest.get("type") 
-                        interest_subject = interest.get("subject", {})
-                        interest_firma_id = interest_subject.get("describedByEntityStatement") or firma_id
-
-                        if person_id and interest_firma_id:
-                            rel_person_batch.append({
-                                "statementID": sid,
-                                "personID": person_id,
-                                "firmaID": interest_firma_id,
-                                "startDate": startDate,
-                                "share_minimum": share_min,
-                                "share_maximum": share_max,
-                                "share_exact": share_ex,
-                                "endDate": endDate,
-                                "type": type,
-                                "statementDate": statementDate
-                            })
-                        if from_firma_id and interest_firma_id:
-                            rel_firma_batch.append({
-                                "statementID": sid,
-                                "fromFirmaID": from_firma_id,
-                                "toFirmaID": interest_firma_id,
-                                "startDate": startDate,
-                                "share_minimum": share_min,     
-                                "share_maximum": share_max,
-                                "share_exact": share_ex,
-                                "endDate": endDate,
-                                "type": type,
-                                "statementDate": statementDate
-                            })
-
-                    # Flush relasjoner
-                    if len(rel_person_batch) >= BATCH_SIZE:
+                        
+                    # Flush relasjoner når batch-size nås
+                    if len(rel_person_to_OOC_batch) >= BATCH_SIZE:
                         with driver.session() as s:
-                            s.execute_write(import_person_to_firma, rel_person_batch)
-                        rel_person_batch.clear()
-                    if len(rel_firma_batch) >= BATCH_SIZE:
+                            s.execute_write(import_person_to_OOC_interest, rel_person_to_OOC_batch)
+                        rel_person_to_OOC_batch.clear()
+                        
+                    if len(rel_firma_to_OOC_batch) >= BATCH_SIZE:
                         with driver.session() as s:
-                            s.execute_write(import_firma_to_firma, rel_firma_batch)
-                        rel_firma_batch.clear()
+                            s.execute_write(import_firma_to_OOC_interest, rel_firma_to_OOC_batch)
+                        rel_firma_to_OOC_batch.clear()
+
 
                 teller_total += 1
 
@@ -802,7 +844,11 @@ def stream_import():
         if person_to_OOC_batch:
             s.execute_write(import_person_to_OOC, person_to_OOC_batch)
         if firma_to_OOC_batch:
-            s.execute_write(import_firma_to_OOC, firma_to_OOC_batch)                       
+            s.execute_write(import_firma_to_OOC, firma_to_OOC_batch)
+        if rel_person_to_OOC_batch:
+            s.execute_write(import_person_to_OOC_interest, rel_person_to_OOC_batch)  
+        if rel_firma_to_OOC_batch:
+            s.execute_write(import_firma_to_OOC_interest, rel_firma_to_OOC_batch)                                
         
 
     # ---------------- RETURN TELLERE ----------------
@@ -816,6 +862,7 @@ def stream_import():
         identifier_count = s.run("MATCH (i:Identifier) RETURN count(i) AS c").single()["c"]
         source_count = s.run("MATCH (so:Source) RETURN count(so) AS c").single()["c"]
         
+        
 
     
 
@@ -826,6 +873,7 @@ def stream_import():
         Describes_Entity_count = s.run("""MATCH ()-[r:DESCRIBES_ENTITY]->() RETURN count(r) AS c""").single()["c"]
         hasadress_count = s.run("MATCH ()-[r:HAS_ADDRESS]->() RETURN count(r) AS c").single()["c"]
         is_interested_party_count = s.run("MATCH ()-[r:IS_INTERESTED_PARTY]->() RETURN count(r) AS c").single()["c"]
+        interested_in_count = s.run("MATCH ()-[r:INTEREST_IN]->() RETURN count(r) AS c").single()["c"]
 
 
 
@@ -844,13 +892,14 @@ def stream_import():
         Describes_Person_count,
         Describes_Entity_count,
         hasadress_count,
-        is_interested_party_count
+        is_interested_party_count,
+        interested_in_count
         
     )
 # ========================
 # KJØR
 # ========================
-teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, dp, de, ha, ii = stream_import()
+teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, dp, de, ha, ip, ii = stream_import()
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
@@ -867,4 +916,5 @@ print(f"HAS_SOURCE relasjoner: {hs}")
 print(f"DESCRIBES_PERSON relasjoner: {dp}")
 print(f"DESCRIBES_ENTITY relasjoner: {de}")
 print(f"HAS_ADDRESS relasjoner: {ha}")
-print(f"IS_INTERESTED_PARTY relasjoner: {ii}")
+print(f"IS_INTERESTED_PARTY relasjoner: {ip}")
+print(f"INTERESTED_IN relasjoner: {ii}")
