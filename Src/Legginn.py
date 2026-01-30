@@ -121,6 +121,11 @@ def import_person_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+           
+        // Lag relasjon til Person hvis personID finnes
+        WITH a, obj WHERE obj.personID IS NOT NULL
+        MERGE (p:Person {ident: obj.personID})
+        MERGE (p)-[:HAS_ADDRESS]->(a)  
     """, batch=batch)
 
 # ---------------- Person Kilde ----------------
@@ -200,6 +205,11 @@ def import_entity_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+
+        // Lag relasjon til Firma hvis EntityID finnes
+        WITH a, obj WHERE obj.EntityID IS NOT NULL
+        MERGE (f:Entity {ident: obj.EntityID})
+        MERGE (f)-[:HAS_ADDRESS]->(a)    
     """, batch=batch)
 
 # ---------------- Firma Kilde ----------------
@@ -404,6 +414,7 @@ def stream_import():
                         if not addr.get("address"):
                             continue
                         personaddress_batch.append({
+                            "personID": sid,   # <- koble adressen til personen
                             "address": addr.get("address"),
                             "country": addr.get("country"),
                             "type": addr.get("type"),
@@ -496,6 +507,7 @@ def stream_import():
                         if not addr.get("address"):
                             continue
                         entityaddress_batch.append({
+                            "EntityID": sid,  # <- koble adressen til firmaet
                             "address": addr.get("address"),
                             "country": addr.get("country"),
                             "type": addr.get("type"),
@@ -749,6 +761,7 @@ def stream_import():
         address_count = s.run("MATCH (a:Address) RETURN count(a) AS c").single()["c"]
         identifier_count = s.run("MATCH (i:Identifier) RETURN count(i) AS c").single()["c"]
         source_count = s.run("MATCH (so:Source) RETURN count(so) AS c").single()["c"]
+        hasadress_count = s.run("MATCH ()-[r:HAS_ADDRESS]->() RETURN count(r) AS c").single()["c"]
 
     
 
@@ -772,13 +785,14 @@ def stream_import():
         source_count,
         Has_Identifier_count,
         Has_Source_count,
-        Describes_count
+        Describes_count,
+        hasadress_count
         
     )
 # ========================
 # KJØR
 # ========================
-teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, ds = stream_import()
+teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, ds, ha = stream_import()
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
@@ -793,3 +807,4 @@ print(f"Source-noder: {so}")
 print(f"HAS_IDENTIFIER relasjoner: {ir}")
 print(f"HAS_SOURCE relasjoner: {hs}")
 print(f"DESCRIBES relasjoner: {ds}")
+print(f"HAS_ADDRESS relasjoner: {ha}")
