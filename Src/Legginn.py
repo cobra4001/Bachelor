@@ -96,7 +96,7 @@ def import_person_statements(tx, batch):
         // Lag relasjon til Person
         WITH ps, obj WHERE obj.personID IS NOT NULL   
         MERGE (p:Person {ident: obj.personID})
-        MERGE (ps)-[:DESCRIBES]->(p) 
+        MERGE (ps)-[:DESCRIBES_PERSON]->(p) 
     """, batch=batch)
 
 
@@ -182,7 +182,7 @@ def import_entity_statements(tx, batch):
         // Lag relasjon til Entity
         WITH fs, obj WHERE obj.EntityID IS NOT NULL
         MERGE (f:Entity {ident: obj.EntityID})
-        MERGE (fs)-[:DESCRIBES]->(f)
+        MERGE (fs)-[:DESCRIBES_ENTITY]->(f)
     """, batch=batch)
 
 # ---------------- Firma ----------------
@@ -761,15 +761,16 @@ def stream_import():
         address_count = s.run("MATCH (a:Address) RETURN count(a) AS c").single()["c"]
         identifier_count = s.run("MATCH (i:Identifier) RETURN count(i) AS c").single()["c"]
         source_count = s.run("MATCH (so:Source) RETURN count(so) AS c").single()["c"]
-        hasadress_count = s.run("MATCH ()-[r:HAS_ADDRESS]->() RETURN count(r) AS c").single()["c"]
+        
 
     
 
 # ---------------- RETURN RELASJONER ----------------
-
         Has_Identifier_count = s.run("""MATCH ()-[r:HAS_IDENTIFIER]->() RETURN count(r) AS c""").single()["c"]
         Has_Source_count = s.run("""MATCH ()-[r:HAS_SOURCE]->() RETURN count(r) AS c""").single()["c"]
-        Describes_count = s.run("""MATCH ()-[r:DESCRIBES]->() RETURN count(r) AS c""").single()["c"]
+        Describes_Person_count = s.run("""MATCH ()-[r:DESCRIBES_PERSON]->() RETURN count(r) AS c""").single()["c"]
+        Describes_Entity_count = s.run("""MATCH ()-[r:DESCRIBES_ENTITY]->() RETURN count(r) AS c""").single()["c"]
+        hasadress_count = s.run("MATCH ()-[r:HAS_ADDRESS]->() RETURN count(r) AS c").single()["c"]
 
 
 
@@ -785,14 +786,15 @@ def stream_import():
         source_count,
         Has_Identifier_count,
         Has_Source_count,
-        Describes_count,
+        Describes_Person_count,
+        Describes_Entity_count,
         hasadress_count
         
     )
 # ========================
 # KJØR
 # ========================
-teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, ds, ha = stream_import()
+teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, dp, de, ha = stream_import()
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
@@ -806,5 +808,6 @@ print(f"identifier-noder: {i}")
 print(f"Source-noder: {so}")
 print(f"HAS_IDENTIFIER relasjoner: {ir}")
 print(f"HAS_SOURCE relasjoner: {hs}")
-print(f"DESCRIBES relasjoner: {ds}")
+print(f"DESCRIBES_PERSON relasjoner: {dp}")
+print(f"DESCRIBES_ENTITY relasjoner: {de}")
 print(f"HAS_ADDRESS relasjoner: {ha}")
