@@ -62,15 +62,27 @@ def json_parse_lines(fileobj):
 # CONSTRAINTS
 # ========================
 def create_constraints(session):
+    # Person
     session.run("""
         CREATE CONSTRAINT person_ident IF NOT EXISTS
         FOR (p:Person) REQUIRE p.ident IS UNIQUE
     """)
+    
+    # Entity / Firma
     session.run("""
-        CREATE CONSTRAINT firma_ident IF NOT EXISTS
-        FOR (f:Firma) REQUIRE f.ident IS UNIQUE
+        CREATE CONSTRAINT entity_ident IF NOT EXISTS
+        FOR (e:Entity) REQUIRE e.ident IS UNIQUE
     """)
-    print("✅ Constraints created")
+    
+    # OOCStatement
+    session.run("""
+        CREATE CONSTRAINT ooc_statement_ident IF NOT EXISTS
+        FOR (os:OOCStatement) REQUIRE os.statementID IS UNIQUE
+    """)
+    
+    print("✅ Constraints created for Person, Entity, and OOCStatement")
+
+
 
 # ========================
 # NODE IMPORT
@@ -430,7 +442,8 @@ def stream_import():
 
     
     
-   
+    total_start_time = datetime.now()  # Starttidspunkt for hele importen
+    start_time = total_start_time       # Starttidspunkt for batch-logging
 
     teller_total = 0
 
@@ -807,11 +820,15 @@ def stream_import():
                 teller_total += 1
 
                 if teller_total % LOG_EVERY == 0:
-                    print(f"{teller_total} objects | Δt: {datetime.now() - start_time}")
-                    start_time = datetime.now()
+                    batch_time = datetime.now() - start_time
+                    total_time = datetime.now() - total_start_time
+                    print(f"{teller_total} objects | Δt batch: {batch_time} | Δt total: {total_time}")
+                    start_time = datetime.now()  # reset for neste batch
 
             except Exception as e:
-                print(f"🚨 ERROR at object {teller_total}: {e}")
+                    total_time = datetime.now() - total_start_time
+                    print(f"🚨 ERROR at object {teller_total} | Δt total: {total_time}: {e}")
+
 
     # ---------------- FLUSH REST ----------------
     with driver.session() as s:
