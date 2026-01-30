@@ -261,6 +261,7 @@ def import_OOC_statements(tx, batch):
             os.pub_date       = COALESCE(obj.publicationDetails_publicationDate, os.pub_date),
             os.pub_publisher_name = COALESCE(obj.publicationDetails_publisher_name, os.pub_publisher_name),
             os.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, os.pub_publisher_url)
+
     """, batch=batch)
 
 # ---------------- OOCStatement kilde ----------------
@@ -294,6 +295,24 @@ def import_OOC_identifiers(tx, batch):
         WITH i, obj
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MERGE (os)-[:HAS_IDENTIFIER]->(i)
+    """, batch=batch)
+
+# ---------------- Person → OOCStatement ----------------
+def import_person_to_OOC(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MATCH (p:Person {ident: obj.personID})
+        MATCH (os:OOCStatement {statementID: obj.oocID})
+        MERGE (p)-[:IS_INTERESTED_PARTY]->(os)
+    """, batch=batch)
+
+# ---------------- Firma → OOCStatement ----------------
+def import_firma_to_OOC(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        MATCH (f:Entity {ident: obj.firmaID})
+        MATCH (os:OOCStatement {statementID: obj.oocID})
+        MERGE (f)-[:IS_INTERESTED_PARTY]->(os)
     """, batch=batch)
 
 
@@ -355,8 +374,11 @@ def stream_import():
     OOCStatement_batch = []
     OOCStatementsource_batch = []
     OOCidentifier_batch = []
-    rel_person_batch = []
-    rel_firma_batch = []
+    person_to_OOC_batch = []
+    firma_to_OOC_batch = []
+
+    
+    
    
 
     teller_total = 0
@@ -500,7 +522,7 @@ def stream_import():
                         "incorporatedInJurisdiction_code": obj.get("incorporatedInJurisdiction", {}).get("code"),
                         "dissolutionDate": obj.get("dissolutionDate")
                     })
-
+                   
                     # ---------------- FIRMA adresse ----------------
                     addresses = obj.get("addresses", [])
                     for addr in addresses:
@@ -581,7 +603,25 @@ def stream_import():
                         "publicationDetails_publicationDate": obj.get("publicationDetails", {}).get("publicationDate"),
                         "publicationDetails_publisher_name": obj.get("publicationDetails", {}).get("publisher", {}).get("name"),
                         "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
+
                     })
+                    # Person → OOC
+                    person_node_id = obj.get("interestedParty", {}).get("describedByPersonStatement")
+                    if person_node_id:
+                        person_to_OOC_batch.append({
+                            "personID": person_node_id,  # dette er Person.ident (statementID)
+                            "oocID": sid                  # OOCStatement.statementID
+                        })
+
+                    # Firma → OOC
+                    firma_node_id = obj.get("subject", {}).get("describedByEntityStatement")
+                    if firma_node_id:
+                        firma_to_OOC_batch.append({
+                            "firmaID": firma_node_id,     # dette er Entity.ident (statementID)
+                            "oocID": sid
+                        })
+
+
 
 
                     # ---------------- OOCStatement kilde ----------------
@@ -616,7 +656,6 @@ def stream_import():
                             s.execute_write(import_OOC_statements, OOCStatement_batch)
                         OOCStatement_batch.clear()
 
-                    
                     # Flush OOCStatement kilde
                     if len(OOCStatementsource_batch) >= BATCH_SIZE:
                         with driver.session() as s:
@@ -624,11 +663,22 @@ def stream_import():
                         OOCStatementsource_batch.clear()
 
                     # Flush OOCStatement identifier batch
-                      # Flush OOCStatement batch
                     if len(OOCidentifier_batch) >= BATCH_SIZE:
                         with driver.session() as s:
                             s.execute_write(import_OOC_identifiers, OOCidentifier_batch)
                         OOCidentifier_batch.clear()
+
+                    # Flush Person → OOC relasjon
+                    if len(person_to_OOC_batch) >= BATCH_SIZE:
+                           with driver.session() as s:
+                               s.execute_write(import_person_to_OOC, person_to_OOC_batch)
+                           person_to_OOC_batch.clear()
+
+                    # Flush Firma → OOC relasjon    
+                    if len(firma_to_OOC_batch) >= BATCH_SIZE:
+                           with driver.session() as s:
+                               s.execute_write(import_firma_to_OOC, firma_to_OOC_batch)
+                           firma_to_OOC_batch.clear()
 
 
                 # ---------------- RELASJONER ----------------
@@ -748,7 +798,11 @@ def stream_import():
         if OOCStatementsource_batch:
             s.execute_write(import_OOC_sources, OOCStatementsource_batch)
         if OOCidentifier_batch:
-            s.execute_write(import_OOC_identifiers, OOCidentifier_batch)            
+            s.execute_write(import_OOC_identifiers, OOCidentifier_batch)
+        if person_to_OOC_batch:
+            s.execute_write(import_person_to_OOC, person_to_OOC_batch)
+        if firma_to_OOC_batch:
+            s.execute_write(import_firma_to_OOC, firma_to_OOC_batch)                       
         
 
     # ---------------- RETURN TELLERE ----------------
@@ -771,6 +825,7 @@ def stream_import():
         Describes_Person_count = s.run("""MATCH ()-[r:DESCRIBES_PERSON]->() RETURN count(r) AS c""").single()["c"]
         Describes_Entity_count = s.run("""MATCH ()-[r:DESCRIBES_ENTITY]->() RETURN count(r) AS c""").single()["c"]
         hasadress_count = s.run("MATCH ()-[r:HAS_ADDRESS]->() RETURN count(r) AS c").single()["c"]
+        is_interested_party_count = s.run("MATCH ()-[r:IS_INTERESTED_PARTY]->() RETURN count(r) AS c").single()["c"]
 
 
 
@@ -788,13 +843,14 @@ def stream_import():
         Has_Source_count,
         Describes_Person_count,
         Describes_Entity_count,
-        hasadress_count
+        hasadress_count,
+        is_interested_party_count
         
     )
 # ========================
 # KJØR
 # ========================
-teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, dp, de, ha = stream_import()
+teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, dp, de, ha, ii = stream_import()
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
@@ -811,3 +867,4 @@ print(f"HAS_SOURCE relasjoner: {hs}")
 print(f"DESCRIBES_PERSON relasjoner: {dp}")
 print(f"DESCRIBES_ENTITY relasjoner: {de}")
 print(f"HAS_ADDRESS relasjoner: {ha}")
+print(f"IS_INTERESTED_PARTY relasjoner: {ii}")
