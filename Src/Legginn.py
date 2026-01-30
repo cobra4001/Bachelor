@@ -910,16 +910,20 @@ def stream_import():
         Describes_Entity_count,
         hasadress_count,
         is_interested_party_count,
-        interested_in_count
+        interested_in_count,
+        total_start_time
         
     )
 # ========================
 # KJØR
 # ========================
-teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, dp, de, ha, ip, ii = stream_import()
+teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, dp, de, ha, ip, ii, total_start_time = stream_import()
+
+total_time = datetime.now() - total_start_time
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
+print(f"Total tid brukt: {total_time}")
 print(f"PersonStatement-noder: {ps}")
 print(f"EntityStatement-noder: {fs}")
 print(f"OOCStatement-noder: {osc}")
