@@ -92,6 +92,11 @@ def import_person_statements(tx, batch):
             ps.pub_date       = COALESCE(obj.publicationDetails_publicationDate, ps.pub_date),
             ps.pub_publisher_name = COALESCE(obj.publicationDetails_publisher_name, ps.pub_publisher_name),
             ps.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, ps.pub_publisher_url)
+           
+        // Lag relasjon til Person
+        WITH ps, obj WHERE obj.personID IS NOT NULL   
+        MERGE (p:Person {ident: obj.personID})
+        MERGE (ps)-[:DESCRIBES]->(p) 
     """, batch=batch)
 
 
@@ -168,6 +173,11 @@ def import_entity_statements(tx, batch):
             fs.pub_date       = COALESCE(obj.publicationDetails_publicationDate, fs.pub_date),
             fs.pub_publisher_name = COALESCE(obj.publicationDetails_publisher_name, fs.pub_publisher_name),
             fs.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, fs.pub_publisher_url)
+           
+        // Lag relasjon til Entity
+        WITH fs, obj WHERE obj.EntityID IS NOT NULL
+        MERGE (f:Entity {ident: obj.EntityID})
+        MERGE (fs)-[:DESCRIBES]->(f)
     """, batch=batch)
 
 # ---------------- Firma ----------------
@@ -337,6 +347,7 @@ def stream_import():
     OOCidentifier_batch = []
     rel_person_batch = []
     rel_firma_batch = []
+   
 
     teller_total = 0
 
@@ -365,7 +376,8 @@ def stream_import():
                         "publicationDetails_license": obj.get("publicationDetails", {}).get("license"),
                         "publicationDetails_publicationDate": obj.get("publicationDetails", {}).get("publicationDate"),
                         "publicationDetails_publisher_name": obj.get("publicationDetails", {}).get("publisher", {}).get("name"),
-                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
+                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url"),
+                        "personID": sid # kobling til personen
                     })
 
                     # ---------------- PERSON ----------------
@@ -460,7 +472,8 @@ def stream_import():
                         "publicationDetails_license": obj.get("publicationDetails", {}).get("license"),
                         "publicationDetails_publicationDate": obj.get("publicationDetails", {}).get("publicationDate"),
                         "publicationDetails_publisher_name": obj.get("publicationDetails", {}).get("publisher", {}).get("name"),
-                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
+                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url"),
+                        "EntityID": sid # kobling til firma
                     })
 
 
@@ -724,10 +737,7 @@ def stream_import():
             s.execute_write(import_OOC_sources, OOCStatementsource_batch)
         if OOCidentifier_batch:
             s.execute_write(import_OOC_identifiers, OOCidentifier_batch)            
-        if rel_person_batch:
-            s.execute_write(import_person_to_firma, rel_person_batch)
-        if rel_firma_batch:
-            s.execute_write(import_firma_to_firma, rel_firma_batch)
+        
 
     # ---------------- RETURN TELLERE ----------------
     with driver.session() as s:
@@ -746,6 +756,7 @@ def stream_import():
 
         Has_Identifier_count = s.run("""MATCH ()-[r:HAS_IDENTIFIER]->() RETURN count(r) AS c""").single()["c"]
         Has_Source_count = s.run("""MATCH ()-[r:HAS_SOURCE]->() RETURN count(r) AS c""").single()["c"]
+        Describes_count = s.run("""MATCH ()-[r:DESCRIBES]->() RETURN count(r) AS c""").single()["c"]
 
 
 
@@ -760,13 +771,14 @@ def stream_import():
         identifier_count,
         source_count,
         Has_Identifier_count,
-        Has_Source_count
+        Has_Source_count,
+        Describes_count
         
     )
 # ========================
 # KJØR
 # ========================
-teller_total, ps, fs, osc, p, f, a, i, so, ir, hs = stream_import()
+teller_total, ps, fs, osc, p, f, a, i, so, ir, hs, ds = stream_import()
 
 print("🎉 Import ferdig!")
 print(f"Totalt prosessert objekter: {teller_total}")
@@ -780,3 +792,4 @@ print(f"identifier-noder: {i}")
 print(f"Source-noder: {so}")
 print(f"HAS_IDENTIFIER relasjoner: {ir}")
 print(f"HAS_SOURCE relasjoner: {hs}")
+print(f"DESCRIBES relasjoner: {ds}")
