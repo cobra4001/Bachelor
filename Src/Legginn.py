@@ -268,11 +268,13 @@ def import_OOC_statements(tx, batch):
             os.statementDate = COALESCE(obj.statementDate, os.statementDate),
             os.isComponent   = COALESCE(obj.isComponent, os.isComponent),
             os.interestedParty_describedByPersonStatement = COALESCE(obj.interestedParty_describedByPersonStatement, os.interestedParty_describedByPersonStatement),
+            os.interestedParty_describedByEntityStatement = COALESCE(obj.interestedParty_describedByEntityStatement, os.interestedParty_describedByEntityStatement),
             os.pub_bodsVersion = COALESCE(obj.publicationDetails_bodsVersion, os.pub_bodsVersion),
             os.pub_license    = COALESCE(obj.publicationDetails_license, os.pub_license),
             os.pub_date       = COALESCE(obj.publicationDetails_publicationDate, os.pub_date),
             os.pub_publisher_name = COALESCE(obj.publicationDetails_publisher_name, os.pub_publisher_name),
-            os.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, os.pub_publisher_url)
+            os.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, os.pub_publisher_url),
+            os.subject_describedByEntityStatement = COALESCE(obj.subject_describedByEntityStatement, os.subject_describedByEntityStatement)
 
     """, batch=batch)
 
@@ -346,25 +348,6 @@ def import_person_to_OOC_interest(tx, batch):
     """, batch=batch)
 
 # Firma → OOCStatement → Firma
-def import_firma_to_OOC_interest(tx, batch):
-    tx.run("""
-        UNWIND $batch AS obj
-        MATCH (f1:Entity {ident: obj.firmaID})
-        MATCH (os:OOCStatement {statementID: obj.oocID})
-        MERGE (f1)-[:IS_INTERESTED_PARTY]->(os)
-        WITH os, obj
-        MATCH (f2:Entity {ident: obj.toFirmaID})
-        MERGE (os)-[r:INTEREST_IN]->(f2)
-        SET r.share_minimum = obj.share_minimum,
-            r.share_maximum = obj.share_maximum,
-            r.share_exact = obj.share_exact,
-            r.startDate = obj.startDate,
-            r.endDate = obj.endDate,
-            r.type = obj.type,
-            r.statementDate = obj.statementDate
-    """, batch=batch)
-
-    # Firma → OOCStatement → Firma
 def import_firma_to_OOC_interest(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -663,11 +646,13 @@ def stream_import():
                         "statementDate": obj.get("statementDate"),
                         "isComponent": obj.get("isComponent"),
                         "interestedParty_describedByPersonStatement": obj.get("interestedParty", {}).get("describedByPersonStatement"),
+                        "interestedParty_describedByEntityStatement": obj.get("interestedParty", {}).get("describedByEntityStatement"),
                         "publicationDetails_bodsVersion": obj.get("publicationDetails", {}).get("bodsVersion"),
                         "publicationDetails_license": obj.get("publicationDetails", {}).get("license"),
                         "publicationDetails_publicationDate": obj.get("publicationDetails", {}).get("publicationDate"),
                         "publicationDetails_publisher_name": obj.get("publicationDetails", {}).get("publisher", {}).get("name"),
-                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
+                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url"),
+                        "subject_describedByEntityStatement": obj.get("subject", {}).get("describedByEntityStatement"),
 
                     })
                     # Person → OOC
