@@ -1,5 +1,5 @@
 import os
-from json import JSONDecoder
+import orjson
 from datetime import datetime
 from neo4j import GraphDatabase
 
@@ -46,7 +46,7 @@ if not os.path.exists(FILE_PATH):
     raise FileNotFoundError(FILE_PATH)
 
 # ========================
-# NDJSON PARSING
+# ORJSON PARSING
 # ========================
 def json_parse_lines(fileobj):
     for line_num, line in enumerate(fileobj, start=1):
@@ -54,7 +54,7 @@ def json_parse_lines(fileobj):
         if not line:
             continue
         try:
-            yield JSONDecoder().decode(line)
+            yield orjson.loads(line)
         except Exception as e:
             print(f"❌ ERROR parsing line {line_num}: {e}")
 
@@ -233,11 +233,13 @@ def import_OOC_statements(tx, batch):
             os.statementDate = COALESCE(obj.statementDate, os.statementDate),
             os.isComponent   = COALESCE(obj.isComponent, os.isComponent),
             os.interestedParty_describedByPersonStatement = COALESCE(obj.interestedParty_describedByPersonStatement, os.interestedParty_describedByPersonStatement),
+            os.interestedParty_describedByEntityStatement = COALESCE(obj.interestedParty_describedByEntityStatement, os.interestedParty_describedByEntityStatement),
             os.pub_bodsVersion = COALESCE(obj.publicationDetails_bodsVersion, os.pub_bodsVersion),
             os.pub_license    = COALESCE(obj.publicationDetails_license, os.pub_license),
             os.pub_date       = COALESCE(obj.publicationDetails_publicationDate, os.pub_date),
             os.pub_publisher_name = COALESCE(obj.publicationDetails_publisher_name, os.pub_publisher_name),
-            os.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, os.pub_publisher_url)
+            os.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, os.pub_publisher_url),
+            os.subject_describedByEntityStatement = COALESCE(obj.subject_describedByEntityStatement, os.subject_describedByEntityStatement)
     """, batch=batch)
 
 # ---------------- OOCStatement kilde ----------------
@@ -513,11 +515,13 @@ def stream_import():
                         "statementDate": obj.get("statementDate"),
                         "isComponent": obj.get("isComponent"),
                         "interestedParty_describedByPersonStatement": obj.get("interestedParty", {}).get("describedByPersonStatement"),
+                        "interestedParty_describedByEntityStatement": obj.get("interestedParty", {}).get("describedByEntityStatement"),
                         "publicationDetails_bodsVersion": obj.get("publicationDetails", {}).get("bodsVersion"),
                         "publicationDetails_license": obj.get("publicationDetails", {}).get("license"),
                         "publicationDetails_publicationDate": obj.get("publicationDetails", {}).get("publicationDate"),
                         "publicationDetails_publisher_name": obj.get("publicationDetails", {}).get("publisher", {}).get("name"),
-                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
+                        "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url"),
+                        "subject_describedByEntityStatement": obj.get("subject", {}).get("describedByEntityStatement"),
                     })
 
 
