@@ -1,5 +1,5 @@
 import os
-from json import JSONDecoder
+import orjson
 from datetime import datetime
 from neo4j import GraphDatabase
 
@@ -31,7 +31,7 @@ URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
 FILE_PATH = r"F:\10 tusen\10000.json"
 
-BATCH_SIZE = 2000
+BATCH_SIZE = 10000
 LOG_EVERY = 10000
 # ========================
 
@@ -46,7 +46,7 @@ if not os.path.exists(FILE_PATH):
     raise FileNotFoundError(FILE_PATH)
 
 # ========================
-# NDJSON PARSING
+# ORJSON PARSING
 # ========================
 def json_parse_lines(fileobj):
     for line_num, line in enumerate(fileobj, start=1):
@@ -54,7 +54,7 @@ def json_parse_lines(fileobj):
         if not line:
             continue
         try:
-            yield JSONDecoder().decode(line)
+            yield orjson.loads(line)
         except Exception as e:
             print(f"❌ ERROR parsing line {line_num}: {e}")
 
