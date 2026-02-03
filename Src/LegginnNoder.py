@@ -29,7 +29,7 @@ def parse_share(value):
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"C:\100 tusen\100000.json"
+FILE_PATH = r"F:\100 tusen\100000.json"
 
 BATCH_SIZE = 2000
 LOG_EVERY = 10000
@@ -292,10 +292,10 @@ def stream_import():
 
     teller_total = 0
 
-    with driver.session() as session:
-        create_constraints(session)
+    with driver.session() as s:
+       create_constraints(s)
 
-    with open(FILE_PATH, "r", encoding="utf-8") as f:
+       with open(FILE_PATH, "r", encoding="utf-8") as f:
         for obj in json_parse_lines(f):
             stype = obj.get("statementType")
             if not stype:
@@ -374,32 +374,27 @@ def stream_import():
 
                     # Flush personstatement batch
                     if len(personStatement_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_person_statements, personStatement_batch)
+                        s.execute_write(import_person_statements, personStatement_batch)
                         personStatement_batch.clear()
 
                     # Flush person batch
                     if len(person_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_persons, person_batch)
+                        s.execute_write(import_persons, person_batch)
                         person_batch.clear()
 
                     # Flush person addresses
                     if len(personaddress_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_person_addresses, personaddress_batch)
+                        s.execute_write(import_person_addresses, personaddress_batch)
                         personaddress_batch.clear()
 
                     # Flush person sources
                     if len(personsource_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_person_sources, personsource_batch)
+                        s.execute_write(import_person_sources, personsource_batch)
                         personsource_batch.clear()    
 
                         # Flush person identifiers
                     if len(personidentifier_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_person_identifiers, personidentifier_batch)
+                        s.execute_write(import_person_identifiers, personidentifier_batch)
                         personidentifier_batch.clear()
 
                
@@ -477,32 +472,27 @@ def stream_import():
 
                     # Flush firmastatement batch
                     if len(entityStatement_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_entity_statements, entityStatement_batch)
+                        s.execute_write(import_entity_statements, entityStatement_batch)
                         entityStatement_batch.clear()
 
                     # Flush firma batch
                     if len(entity_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_entitys, entity_batch)
+                        s.execute_write(import_entitys, entity_batch)
                         entity_batch.clear()
 
                     # Flush firma addresses
                     if len(entityaddress_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_entity_addresses, entityaddress_batch)
+                        s.execute_write(import_entity_addresses, entityaddress_batch)
                         entityaddress_batch.clear()
 
                     # Flush firma sources
                     if len(entitysource_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_entity_sources, entitysource_batch)
+                        s.execute_write(import_entity_sources, entitysource_batch)
                         entitysource_batch.clear()
 
                     # Flush firma identifiers
                     if len(entityidentifier_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_entity_identifiers, entityidentifier_batch)
+                        s.execute_write(import_entity_identifiers, entityidentifier_batch)
                         entityidentifier_batch.clear()
 
                 # ---------------- OOCStatement ----------------
@@ -553,22 +543,19 @@ def stream_import():
                             
                     # Flush OOCStatement batch
                     if len(OOCStatement_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_OOC_statements, OOCStatement_batch)
+                        s.execute_write(import_OOC_statements, OOCStatement_batch)
                         OOCStatement_batch.clear()
 
                     
                     # Flush OOCStatement kilde
                     if len(OOCStatementsource_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_OOC_sources, OOCStatementsource_batch)
+                        s.execute_write(import_OOC_sources, OOCStatementsource_batch)
                         OOCStatementsource_batch.clear()
 
                 
                     # Flush OOC identifiers
                     if len(OOCidentifier_batch) >= BATCH_SIZE:
-                        with driver.session() as s:
-                            s.execute_write(import_OOC_identifiers, OOCidentifier_batch)
+                        s.execute_write(import_OOC_identifiers, OOCidentifier_batch)
                         OOCidentifier_batch.clear()
                         
                 
@@ -583,7 +570,6 @@ def stream_import():
                 print(f"🚨 ERROR at object {teller_total}: {e}")
 
     # ---------------- FLUSH REST ----------------
-    with driver.session() as s:
         if personStatement_batch:
             s.execute_write(import_person_statements, personStatement_batch)
         if person_batch:
@@ -612,7 +598,6 @@ def stream_import():
             s.execute_write(import_OOC_identifiers, OOCidentifier_batch)            
       
     # ---------------- RETURN TELLERE ----------------
-    with driver.session() as s:
         personstatement_count = s.run("MATCH (ps:PersonStatement) RETURN count(ps) AS c").single()["c"]
         entitystatement_count = s.run("MATCH (fs:EntityStatement) RETURN count(fs) AS c").single()["c"]
         ownershiporcontrolstatement_count = s.run("MATCH (os:OOCStatement) RETURN count(os) AS c").single()["c"]
