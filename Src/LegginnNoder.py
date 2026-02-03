@@ -1,9 +1,8 @@
 import os
 import orjson
 import time
-import multiprocessing
-from multiprocessing import Process, Value, Lock
-from datetime import datetime, timedelta
+from multiprocessing import Process, Value
+from datetime import datetime
 from neo4j import GraphDatabase
 from neo4j.exceptions import TransientError
 
@@ -14,7 +13,7 @@ URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
 FILE_PATH = r"F:\100 tusen\100000.json"
 
-BATCH_SIZE = 2000
+BATCH_SIZE = 7000
 CPU_CORES = 8       # Bruker alle 8 kjernene
 LOG_INTERVAL = 2.0  # Hvor ofte (sekunder) status skal printes til terminalen
 
@@ -281,7 +280,7 @@ def worker_process(chunk_info, shared_counter):
                 sid = obj.get("statementID")
 
                 # ========================
-                # MAPPING (Lik din opprinnelige kode)
+                # MAPPING 
                 # ========================
 
                 if stype == "personStatement":
