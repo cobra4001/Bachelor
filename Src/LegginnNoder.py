@@ -1,18 +1,46 @@
 import os
 import orjson
-from datetime import datetime
+import time
+import multiprocessing
+from multiprocessing import Process, Value, Lock
+from datetime import datetime, timedelta
 from neo4j import GraphDatabase
+from neo4j.exceptions import TransientError
 
 # ========================
-# HJELPEFUNKSJONER
+# KONFIGURASJON
 # ========================
+URI = "bolt://10.196.241.255:7687"
+AUTH = ("neo4j", "mRTzP1@h")
+FILE_PATH = r"F:\100 tusen\100000.json"
 
+BATCH_SIZE = 2000
+CPU_CORES = 8       # Bruker alle 8 kjernene
+LOG_INTERVAL = 2.0  # Hvor ofte (sekunder) status skal printes til terminalen
+
+
+def run_with_retry(session, func, batch, max_retries=5):
+    """
+    Kjør en skrivetransaksjon med enkel retry ved TransientError (inkl. deadlocks).
+    Dette hindrer at prosesser feiler permanent ved midlertidige låsekonflikter.
+    """
+    attempt = 0
+    while True:
+        try:
+            return session.execute_write(func, batch)
+        except TransientError as e:
+            attempt += 1
+            if attempt > max_retries:
+                print(f"🚨 Gitt opp etter {max_retries} forsøk for batch: {e}")
+                raise
+            sleep_time = 0.5 * attempt
+            print(f"⚠️ TransientError (forsøk {attempt}/{max_retries}), prøver igjen om {sleep_time:.1f}s: {e.code}")
+            time.sleep(sleep_time)
+
+# ========================
+# HJELPEFUNKSJONER (Globalt scope for workers)
+# ========================
 def parse_share(value):
-    """
-    Konverterer en string eller int til float.
-    Fjerner % hvis det finnes.
-    Returnerer None hvis verdien er ugyldig.
-    """
     if isinstance(value, str):
         value = value.strip().replace("%", "")
         try:
@@ -25,69 +53,9 @@ def parse_share(value):
         return None
 
 # ========================
-# KONFIG
-# ========================
-URI = "bolt://10.196.241.255:7687"
-AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\100 tusen\100000.json"
-
-BATCH_SIZE = 2000
-LOG_EVERY = 10000
+# CYPHER QUERIES
 # ========================
 
-# ========================
-# KOBLE TIL NEO4J
-# ========================
-driver = GraphDatabase.driver(URI, auth=AUTH)
-driver.verify_connectivity()
-print("✅ Connection to Neo4j established.")
-
-if not os.path.exists(FILE_PATH):
-    raise FileNotFoundError(FILE_PATH)
-
-# ========================
-# ORJSON PARSING
-# ========================
-def json_parse_lines(fileobj):
-    for line_num, line in enumerate(fileobj, start=1):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            yield orjson.loads(line)
-        except Exception as e:
-            print(f"❌ ERROR parsing line {line_num}: {e}")
-
-# ========================
-# CONSTRAINTS
-# ========================
-def create_constraints(session):
-    # Person
-    session.run("""
-        CREATE CONSTRAINT person_ident IF NOT EXISTS
-        FOR (p:Person) REQUIRE p.ident IS UNIQUE
-    """)
-    
-    # Entity / Firma
-    session.run("""
-        CREATE CONSTRAINT entity_ident IF NOT EXISTS
-        FOR (e:Entity) REQUIRE e.ident IS UNIQUE
-    """)
-    
-    # OOCStatement
-    session.run("""
-        CREATE CONSTRAINT ooc_statement_ident IF NOT EXISTS
-        FOR (os:OOCStatement) REQUIRE os.statementID IS UNIQUE
-    """)
-    
-    print("✅ Constraints created for Person, Entity, and OOCStatement")
-
-# ========================
-# NODE IMPORT
-# ========================
-
-
-# ---------------- PERSONSTATEMENT ----------------
 def import_person_statements(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -104,8 +72,6 @@ def import_person_statements(tx, batch):
             ps.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, ps.pub_publisher_url)
     """, batch=batch)
 
-
-# ---------------- PERSON ----------------
 def import_persons(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -121,19 +87,16 @@ def import_persons(tx, batch):
             p.Country       = COALESCE(obj.Country, p.Country)
     """, batch=batch)
 
-# ---------------- Person Adresse ----------------
 def import_person_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
     """, batch=batch)
 
-# ---------------- Person Kilde ----------------
-
 def import_person_sources(tx, batch):
+    # Constraint på Source.url håndterer unikhet
     tx.run("""
         UNWIND $batch AS obj
-        // Bare merge hvis url finnes
         WITH obj WHERE obj.url IS NOT NULL
         MERGE (so:Source {url: obj.url})
         SET
@@ -144,8 +107,6 @@ def import_person_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
-
-# ---------------- Person identifier ----------------
 def import_person_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -156,8 +117,6 @@ def import_person_identifiers(tx, batch):
             i.uri = COALESCE(obj.uri, i.uri)    
     """, batch=batch)
 
-
-# ---------------- FIRMASTATEMENT ----------------
 def import_entity_statements(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -174,7 +133,6 @@ def import_entity_statements(tx, batch):
             fs.pub_publisher_url  = COALESCE(obj.publicationDetails_publisher_url, fs.pub_publisher_url)
     """, batch=batch)
 
-# ---------------- Firma ----------------
 def import_entitys(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -189,18 +147,15 @@ def import_entitys(tx, batch):
             f.dissolutionDate = COALESCE(obj.dissolutionDate, f.dissolutionDate)
     """, batch=batch)
 
-# ---------------- Firma adresse ----------------
 def import_entity_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
     """, batch=batch)
 
-# ---------------- Firma Kilde ----------------
 def import_entity_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        // Bare merge hvis url finnes
         WITH obj WHERE obj.url IS NOT NULL
         MERGE (so:Source {url: obj.url})
         SET
@@ -211,7 +166,6 @@ def import_entity_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
-# ---------------- Firma Identifier ----------------
 def import_entity_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -223,7 +177,6 @@ def import_entity_identifiers(tx, batch):
             i.uri = COALESCE(obj.uri, i.uri)
     """, batch=batch)
 
-# ---------------- OOCStatement ----------------
 def import_OOC_statements(tx, batch): 
     tx.run("""
         UNWIND $batch AS obj
@@ -242,11 +195,9 @@ def import_OOC_statements(tx, batch):
             os.subject_describedByEntityStatement = COALESCE(obj.subject_describedByEntityStatement, os.subject_describedByEntityStatement)
     """, batch=batch)
 
-# ---------------- OOCStatement kilde ----------------
 def import_OOC_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        // Bare merge hvis url finnes
         WITH obj WHERE obj.url IS NOT NULL
         MERGE (so:Source {url: obj.url})
         SET
@@ -257,7 +208,6 @@ def import_OOC_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
-# ---------------- OOCStatement Identifier ----------------
 def import_OOC_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
@@ -270,43 +220,72 @@ def import_OOC_identifiers(tx, batch):
         WITH i, obj
     """, batch=batch)
 
+# ========================
+# CONSTRAINTS (Kjøres i main)
+# ========================
+def create_constraints(session):
+    # Person, Entity, OOC
+    session.run("CREATE CONSTRAINT person_ident IF NOT EXISTS FOR (p:Person) REQUIRE p.ident IS UNIQUE")
+    session.run("CREATE CONSTRAINT entity_ident IF NOT EXISTS FOR (e:Entity) REQUIRE e.ident IS UNIQUE")
+    session.run("CREATE CONSTRAINT ooc_statement_ident IF NOT EXISTS FOR (os:OOCStatement) REQUIRE os.statementID IS UNIQUE")
+    
+    # VIKTIG: Constraint på Source URL for å unngå duplikater ved multiprosessering
+    session.run("CREATE CONSTRAINT source_url IF NOT EXISTS FOR (s:Source) REQUIRE s.url IS UNIQUE")
+    print("✅ Constraints created for Person, Entity, OOCStatement, and Source.")
+
 
 # ========================
-# IMPORT
+# WORKER PROCESS
 # ========================
-def stream_import():
-    start_time = datetime.now()
-    personStatement_batch = []
-    person_batch = []
-    personaddress_batch = []
-    personsource_batch = []
-    personidentifier_batch = []
-    entityStatement_batch = []
-    entity_batch = []
-    entityaddress_batch = []
-    entitysource_batch = []
-    entityidentifier_batch = []
-    OOCStatement_batch = []
-    OOCStatementsource_batch = []
-    OOCidentifier_batch = []
+def worker_process(chunk_info, shared_counter):
+    """
+    Kjøres av hver prosess. Leser en del av filen og importerer til Neo4j.
+    """
+    file_path, start_byte, end_byte, worker_id = chunk_info
+    
+    # Koble til Neo4j i hver prosess
+    driver = GraphDatabase.driver(URI, auth=AUTH)
+    
+    # Lokale batch-lister
+    batches = {
+        "personStatement": [], "person": [], "personaddress": [], "personsource": [], "personidentifier": [],
+        "entityStatement": [], "entity": [], "entityaddress": [], "entitysource": [], "entityidentifier": [],
+        "OOCStatement": [], "OOCsource": [], "OOCidentifier": []
+    }
 
-    teller_total = 0
+    local_processed_count = 0
 
-    with driver.session() as s:
-       create_constraints(s)
+    try:
+        with open(file_path, "rb") as f:
+            f.seek(start_byte)
+            # Hvis vi ikke er på starten, hopp over første (delvise) linje
+            if start_byte > 0:
+                f.readline()
 
-       with open(FILE_PATH, "r", encoding="utf-8") as f:
-        for obj in json_parse_lines(f):
-            stype = obj.get("statementType")
-            if not stype:
-                continue
+            while True:
+                # Sjekk om vi er ferdig med vår del
+                if f.tell() > end_byte:
+                    break
+                
+                line = f.readline()
+                if not line: break
 
-            try:
-                # ---------------- PERSONSTATEMENT ----------------
+                try:
+                    obj = orjson.loads(line)
+                except:
+                    continue
+
+                stype = obj.get("statementType")
+                if not stype: continue
+
+                sid = obj.get("statementID")
+
+                # ========================
+                # MAPPING (Lik din opprinnelige kode)
+                # ========================
+
                 if stype == "personStatement":
-                    sid = obj.get("statementID")
-
-                    personStatement_batch.append({
+                    batches["personStatement"].append({
                         "statementID": sid,
                         "personType": obj.get("personType"),
                         "statementType": obj.get("statementType"),
@@ -320,13 +299,12 @@ def stream_import():
                         "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
                     })
 
-                    # ---------------- PERSON ----------------
                     names = obj.get("names", [])
                     name = names[0] if names else {}
                     nationalites = obj.get("nationalities", [])
                     national = nationalites[0] if nationalites else {}
 
-                    person_batch.append({ 
+                    batches["person"].append({ 
                         "personID": sid,
                         "fullName": name.get("fullName"),
                         "givenName": name.get("givenName"),
@@ -338,72 +316,20 @@ def stream_import():
                         "Country": national.get("name")
                     })
 
-                    # ---------------- Person adresse ----------------
-                    addresses = obj.get("addresses", [])
-                    for addr in addresses:
-                        if not addr.get("address"):
-                            continue
-                        personaddress_batch.append({
-                            "address": addr.get("address"),
-                            "country": addr.get("country"),
-                            "type": addr.get("type"),
-                        })
+                    for addr in obj.get("addresses", []):
+                        if addr.get("address"):
+                            batches["personaddress"].append({"address": addr.get("address"), "country": addr.get("country"), "type": addr.get("type")})
 
-                    # ---------------- PersonStatement kilde ----------------
                     source = obj.get("source")
                     if source and source.get("url"):
-                        personsource_batch.append({
-                            "statementID": sid,  # kobling til statementen
-                            "assertedBy": source.get("assertedBy"),
-                            "description": source.get("description"),
-                            "retrievedAt": source.get("retrievedAt"),
-                            "type": source.get("type"),
-                            "url": source.get("url"),
-                        })
+                        batches["personsource"].append(source) # Pass source dict directly, url is key
 
-                    # ---------------- PersonStatement identifier ----------------
-                    identifiers = obj.get("identifiers", [])
-                    for ident in identifiers:
-                        if ident.get("uri"):  # bare ta med de som har URI
-                            personidentifier_batch.append({
-                                "statementID": sid, # kobling til statementen
-                                "id": ident.get("id"),
-                                "schemeName": ident.get("schemeName"),
-                                "uri": ident.get("uri"),
-                            })
-
-                    # Flush personstatement batch
-                    if len(personStatement_batch) >= BATCH_SIZE:
-                        s.execute_write(import_person_statements, personStatement_batch)
-                        personStatement_batch.clear()
-
-                    # Flush person batch
-                    if len(person_batch) >= BATCH_SIZE:
-                        s.execute_write(import_persons, person_batch)
-                        person_batch.clear()
-
-                    # Flush person addresses
-                    if len(personaddress_batch) >= BATCH_SIZE:
-                        s.execute_write(import_person_addresses, personaddress_batch)
-                        personaddress_batch.clear()
-
-                    # Flush person sources
-                    if len(personsource_batch) >= BATCH_SIZE:
-                        s.execute_write(import_person_sources, personsource_batch)
-                        personsource_batch.clear()    
-
-                        # Flush person identifiers
-                    if len(personidentifier_batch) >= BATCH_SIZE:
-                        s.execute_write(import_person_identifiers, personidentifier_batch)
-                        personidentifier_batch.clear()
-
-               
-                    # ---------------- FIRMASTATEMENT ----------------
+                    for ident in obj.get("identifiers", []):
+                        if ident.get("uri"):
+                            batches["personidentifier"].append(ident)
 
                 elif stype == "entityStatement":
-                    sid = obj.get("statementID")
-
-                    entityStatement_batch.append({
+                    batches["entityStatement"].append({
                         "statementID": sid,
                         "replacesStatements": obj.get("replacesStatements"),
                         "statementType": obj.get("statementType"),
@@ -416,10 +342,7 @@ def stream_import():
                         "publicationDetails_publisher_url": obj.get("publicationDetails", {}).get("publisher", {}).get("url")
                     })
 
-
-                      # ---------------- FIRMA ----------------
-                    entity_batch.append({
-                        
+                    batches["entity"].append({
                         "EntityID": sid,
                         "name": obj.get("name"),
                         "alternateNames": obj.get("alternateNames"),
@@ -430,76 +353,20 @@ def stream_import():
                         "dissolutionDate": obj.get("dissolutionDate")
                     })
 
-                    # ---------------- FIRMA adresse ----------------
-                    addresses = obj.get("addresses", [])
-                    for addr in addresses:
-                        if not addr.get("address"):
-                            continue
-                        entityaddress_batch.append({
-                            "address": addr.get("address"),
-                            "country": addr.get("country"),
-                            "type": addr.get("type"),
-                        })
-
-                    # ---------------- FirmaStatement kilde ----------------
+                    for addr in obj.get("addresses", []):
+                        if addr.get("address"):
+                            batches["entityaddress"].append({"address": addr.get("address"), "country": addr.get("country"), "type": addr.get("type")})
 
                     source = obj.get("source")
-
                     if source and source.get("url"):
-                        entitysource_batch.append({
-                            "statementID": sid,
-                            "assertedBy": source.get("assertedBy"),
-                            "description": source.get("description"),
-                            "retrievedAt": source.get("retrievedAt"),
-                            "type": source.get("type"),
-                            "url": source.get("url"),
-                        })
+                        batches["entitysource"].append(source)
 
+                    for ident in obj.get("identifiers", []):
+                        if ident.get("uri"):
+                            batches["entityidentifier"].append(ident)
 
-
-                    # ---------------- FirmaStatement identifier ----------------
-
-                    identifiers = obj.get("identifiers", [])
-                    for ident in identifiers:
-                        if ident.get("uri"):  # bare ta med de som har URI
-                            entityidentifier_batch.append({
-                                "statementID": sid,
-                                "id": ident.get("id"),
-                                "scheme": ident.get("scheme"),
-                                "schemeName": ident.get("schemeName"),
-                                "uri": ident.get("uri"),
-                            })
-
-                    # Flush firmastatement batch
-                    if len(entityStatement_batch) >= BATCH_SIZE:
-                        s.execute_write(import_entity_statements, entityStatement_batch)
-                        entityStatement_batch.clear()
-
-                    # Flush firma batch
-                    if len(entity_batch) >= BATCH_SIZE:
-                        s.execute_write(import_entitys, entity_batch)
-                        entity_batch.clear()
-
-                    # Flush firma addresses
-                    if len(entityaddress_batch) >= BATCH_SIZE:
-                        s.execute_write(import_entity_addresses, entityaddress_batch)
-                        entityaddress_batch.clear()
-
-                    # Flush firma sources
-                    if len(entitysource_batch) >= BATCH_SIZE:
-                        s.execute_write(import_entity_sources, entitysource_batch)
-                        entitysource_batch.clear()
-
-                    # Flush firma identifiers
-                    if len(entityidentifier_batch) >= BATCH_SIZE:
-                        s.execute_write(import_entity_identifiers, entityidentifier_batch)
-                        entityidentifier_batch.clear()
-
-                # ---------------- OOCStatement ----------------
                 elif stype == "ownershipOrControlStatement":
-                    sid = obj.get("statementID")
-
-                    OOCStatement_batch.append({
+                    batches["OOCStatement"].append({
                         "statementID": sid,
                         "statementType": obj.get("statementType"),
                         "statementDate": obj.get("statementDate"),
@@ -514,124 +381,198 @@ def stream_import():
                         "subject_describedByEntityStatement": obj.get("subject", {}).get("describedByEntityStatement"),
                     })
 
-
-                    # ---------------- OOCStatement kilde ----------------
-
                     source = obj.get("source")
-
                     if source and source.get("url"):
-                        OOCStatementsource_batch.append({
-                            "statementID": sid,
-                            "assertedBy": source.get("assertedBy"),
-                            "description": source.get("description"),
-                            "retrievedAt": source.get("retrievedAt"),
-                            "type": source.get("type"),
-                            "url": source.get("url"),
-                        })
+                        batches["OOCsource"].append(source)
 
-                    # ---------------- OOCStatement identifier ----------------
-                    identifiers = obj.get("identifiers", [])
-                    for ident in identifiers:
-                        if ident.get("uri"):  # bare ta med de som har URI
-                            OOCidentifier_batch.append({
-                                "statementID": sid,
-                                "id": ident.get("id"),
-                                "scheme": ident.get("scheme"),
-                                "schemeName": ident.get("schemeName"),
-                                "uri": ident.get("uri"),
-                                })
-                            
-                    # Flush OOCStatement batch
-                    if len(OOCStatement_batch) >= BATCH_SIZE:
-                        s.execute_write(import_OOC_statements, OOCStatement_batch)
-                        OOCStatement_batch.clear()
+                    for ident in obj.get("identifiers", []):
+                        if ident.get("uri"):
+                            batches["OOCidentifier"].append(ident)
 
+                local_processed_count += 1
+
+                # ========================
+                # FLUSH BATCHES (Hvis full)
+                # ========================
+                if local_processed_count % 500 == 0:  # Sjekk batchstørrelser
+                    with driver.session() as s:
+                        if len(batches["personStatement"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_person_statements, batches["personStatement"])
+                            batches["personStatement"].clear()
+                        if len(batches["person"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_persons, batches["person"])
+                            batches["person"].clear()
+                        if len(batches["personaddress"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_person_addresses, batches["personaddress"])
+                            batches["personaddress"].clear()
+                        if len(batches["personsource"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_person_sources, batches["personsource"])
+                            batches["personsource"].clear()
+                        if len(batches["personidentifier"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_person_identifiers, batches["personidentifier"])
+                            batches["personidentifier"].clear()
+
+                        if len(batches["entityStatement"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_entity_statements, batches["entityStatement"])
+                            batches["entityStatement"].clear()
+                        if len(batches["entity"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_entitys, batches["entity"])
+                            batches["entity"].clear()
+                        if len(batches["entityaddress"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_entity_addresses, batches["entityaddress"])
+                            batches["entityaddress"].clear()
+                        if len(batches["entitysource"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_entity_sources, batches["entitysource"])
+                            batches["entitysource"].clear()
+                        if len(batches["entityidentifier"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_entity_identifiers, batches["entityidentifier"])
+                            batches["entityidentifier"].clear()
+
+                        if len(batches["OOCStatement"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_OOC_statements, batches["OOCStatement"])
+                            batches["OOCStatement"].clear()
+                        if len(batches["OOCsource"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_OOC_sources, batches["OOCsource"])
+                            batches["OOCsource"].clear()
+                        if len(batches["OOCidentifier"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_OOC_identifiers, batches["OOCidentifier"])
+                            batches["OOCidentifier"].clear()
                     
-                    # Flush OOCStatement kilde
-                    if len(OOCStatementsource_batch) >= BATCH_SIZE:
-                        s.execute_write(import_OOC_sources, OOCStatementsource_batch)
-                        OOCStatementsource_batch.clear()
+                    # Oppdater delt teller (trygt med multiprosessering)
+                    with shared_counter.get_lock():
+                        shared_counter.value += 500
+                    local_processed_count -= 500 # Nullstill lokal for å unngå dobbelttelling i batchlogikk
 
-                
-                    # Flush OOC identifiers
-                    if len(OOCidentifier_batch) >= BATCH_SIZE:
-                        s.execute_write(import_OOC_identifiers, OOCidentifier_batch)
-                        OOCidentifier_batch.clear()
-                        
-                
-              
-                teller_total += 1
+            # ========================
+            # FLUSH REST (Slutten av chunk)
+            # ========================
+            with driver.session() as s:
+                if batches["personStatement"]:
+                    run_with_retry(s, import_person_statements, batches["personStatement"])
+                if batches["person"]:
+                    run_with_retry(s, import_persons, batches["person"])
+                if batches["personaddress"]:
+                    run_with_retry(s, import_person_addresses, batches["personaddress"])
+                if batches["personsource"]:
+                    run_with_retry(s, import_person_sources, batches["personsource"])
+                if batches["personidentifier"]:
+                    run_with_retry(s, import_person_identifiers, batches["personidentifier"])
 
-                if teller_total % LOG_EVERY == 0:
-                    print(f"{teller_total} objects | Δt: {datetime.now() - start_time}")
-                    start_time = datetime.now()
+                if batches["entityStatement"]:
+                    run_with_retry(s, import_entity_statements, batches["entityStatement"])
+                if batches["entity"]:
+                    run_with_retry(s, import_entitys, batches["entity"])
+                if batches["entityaddress"]:
+                    run_with_retry(s, import_entity_addresses, batches["entityaddress"])
+                if batches["entitysource"]:
+                    run_with_retry(s, import_entity_sources, batches["entitysource"])
+                if batches["entityidentifier"]:
+                    run_with_retry(s, import_entity_identifiers, batches["entityidentifier"])
 
-            except Exception as e:
-                print(f"🚨 ERROR at object {teller_total}: {e}")
+                if batches["OOCStatement"]:
+                    run_with_retry(s, import_OOC_statements, batches["OOCStatement"])
+                if batches["OOCsource"]:
+                    run_with_retry(s, import_OOC_sources, batches["OOCsource"])
+                if batches["OOCidentifier"]:
+                    run_with_retry(s, import_OOC_identifiers, batches["OOCidentifier"])
+            
+            # Oppdater teller med resten
+            if local_processed_count > 0:
+                with shared_counter.get_lock():
+                    shared_counter.value += local_processed_count
 
-    # ---------------- FLUSH REST ----------------
-        if personStatement_batch:
-            s.execute_write(import_person_statements, personStatement_batch)
-        if person_batch:
-            s.execute_write(import_persons, person_batch)
-        if personaddress_batch:
-            s.execute_write(import_person_addresses, personaddress_batch)
-        if entityStatement_batch:
-            s.execute_write(import_entity_statements, entityStatement_batch)
-        if personsource_batch:
-            s.execute_write(import_person_sources, personsource_batch)
-        if personidentifier_batch:
-            s.execute_write(import_person_identifiers, personidentifier_batch)      
-        if entity_batch:
-            s.execute_write(import_entitys, entity_batch)
-        if entityaddress_batch:
-            s.execute_write(import_entity_addresses, entityaddress_batch)
-        if entitysource_batch:
-            s.execute_write(import_entity_sources, entitysource_batch)    
-        if entityidentifier_batch:
-            s.execute_write(import_entity_identifiers, entityidentifier_batch)   
-        if OOCStatement_batch:
-            s.execute_write(import_OOC_statements, OOCStatement_batch)
-        if OOCStatementsource_batch:
-            s.execute_write(import_OOC_sources, OOCStatementsource_batch)
-        if OOCidentifier_batch:
-            s.execute_write(import_OOC_identifiers, OOCidentifier_batch)            
-      
-    # ---------------- RETURN TELLERE ----------------
-        personstatement_count = s.run("MATCH (ps:PersonStatement) RETURN count(ps) AS c").single()["c"]
-        entitystatement_count = s.run("MATCH (fs:EntityStatement) RETURN count(fs) AS c").single()["c"]
-        ownershiporcontrolstatement_count = s.run("MATCH (os:OOCStatement) RETURN count(os) AS c").single()["c"]
-        person_count = s.run("MATCH (p:Person) RETURN count(p) AS c").single()["c"]
-        entity_count = s.run("MATCH (f:Entity) RETURN count(f) AS c").single()["c"]
-        address_count = s.run("MATCH (a:Address) RETURN count(a) AS c").single()["c"]
-        identifier_count = s.run("MATCH (i:Identifier) RETURN count(i) AS c").single()["c"]
-        source_count = s.run("MATCH (so:Source) RETURN count(so) AS c").single()["c"]
+    except Exception as e:
+        print(f"🚨 Worker {worker_id} feilet: {e}")
+    finally:
+        driver.close()
 
-
-
-    return (
-        teller_total,
-        personstatement_count,
-        entitystatement_count,
-        ownershiporcontrolstatement_count,
-        person_count,
-        entity_count,
-        address_count,
-        identifier_count,
-        source_count
-    )
 # ========================
-# KJØR
+# MONITOR (Printer fremdrift)
 # ========================
-teller_total, ps, fs, osc, p, f, a, i, so = stream_import()
+def monitor_progress(shared_counter, total_file_size):
+    start_time = datetime.now()
+    while True:
+        time.sleep(LOG_INTERVAL)
+        current_count = shared_counter.value
+        elapsed = datetime.now() - start_time
+        
+        # Hvis vi vil stoppe (dette er en enkel implementasjon, main dreper prosessen når ferdig)
+        print(f"📊 Processed objects: {current_count} | Tid: {elapsed}")
 
-print("🎉 Import ferdig!")
-print(f"Totalt prosessert objekter: {teller_total}")
-print(f"PersonStatement-noder: {ps}")
-print(f"EntityStatement-noder: {fs}")
-print(f"OOCStatement-noder: {osc}")
-print(f"Person-noder: {p}")
-print(f"Entity-noder: {f}")
-print(f"Adresse-noder: {a}")
-print(f"identifier-noder: {i}")
-print(f"Source-noder: {so}")
+# ========================
+# MAIN
+# ========================
+if __name__ == "__main__":
+    if not os.path.exists(FILE_PATH):
+        raise FileNotFoundError(FILE_PATH)
+    
+    # 1. Oppsett av DB og Constraints
+    print("🔌 Kobler til Neo4j for oppsett...")
+    main_driver = GraphDatabase.driver(URI, auth=AUTH)
+    main_driver.verify_connectivity()
+    with main_driver.session() as s:
+        create_constraints(s)
+    main_driver.close()
+    
+    # 2. Forbered Multiprosessering
+    file_size = os.path.getsize(FILE_PATH)
+    chunk_size = file_size // CPU_CORES
+    
+    print(f"📦 Filstørrelse: {file_size / (1024*1024):.2f} MB")
+    print(f"🚀 Starter {CPU_CORES} workers...")
+
+    # Delt teller for alle prosessene
+    shared_counter = Value('i', 0) 
+    
+    processes = []
+    
+    start_time_total = datetime.now()
+
+    # 3. Start Workers
+    for i in range(CPU_CORES):
+        start = i * chunk_size
+        end = file_size if i == CPU_CORES - 1 else (i + 1) * chunk_size
+        chunk_args = (FILE_PATH, start, end, i+1)
+        
+        p = Process(target=worker_process, args=(chunk_args, shared_counter))
+        p.start()
+        processes.append(p)
+
+    # 4. Start Monitor (for visuell output mens importen kjører)
+    monitor_p = Process(target=monitor_progress, args=(shared_counter, file_size))
+    monitor_p.start()
+
+    # 5. Vent på at alle workers er ferdige
+    for p in processes:
+        p.join()
+    
+    # Stopp monitor
+    monitor_p.terminate()
+
+    # 6. Sluttrapport
+    print("\n🎉 Import ferdig (Alle workers avsluttet)!")
+    print(f"Total tid: {datetime.now() - start_time_total}")
+    print(f"Totalt antall objekter lest ifølge teller: {shared_counter.value}")
+
+    # Sjekk faktiske tall i DB
+    print("\n🔍 Sjekker database-tall...")
+    main_driver = GraphDatabase.driver(URI, auth=AUTH)
+    with main_driver.session() as s:
+        ps = s.run("MATCH (ps:PersonStatement) RETURN count(ps) AS c").single()["c"]
+        fs = s.run("MATCH (fs:EntityStatement) RETURN count(fs) AS c").single()["c"]
+        osc = s.run("MATCH (os:OOCStatement) RETURN count(os) AS c").single()["c"]
+        p = s.run("MATCH (p:Person) RETURN count(p) AS c").single()["c"]
+        f = s.run("MATCH (f:Entity) RETURN count(f) AS c").single()["c"]
+        so = s.run("MATCH (so:Source) RETURN count(so) AS c").single()["c"]
+        id = s.run("MATCH (i:Identifier) RETURN count(i) AS c").single()["c"]
+        ad = s.run("MATCH (a:Address) RETURN count(a) AS c").single()["c"]
+    main_driver.close()
+
+    print(f"PersonStatement-noder: {ps}")
+    print(f"EntityStatement-noder: {fs}")
+    print(f"OOCStatement-noder: {osc}")
+    print(f"Person-noder: {p}")
+    print(f"Entity-noder: {f}")
+    print(f"Source-noder: {so}")
+    print(f"Identifier-noder: {id}")
+    print(f"Address-noder: {ad}")
