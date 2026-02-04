@@ -6,7 +6,7 @@ from datetime import datetime
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-BATCH_SIZE = 2000   # antall noder per batch
+BATCH_SIZE = 7000   # antall noder per batch
 # ========================
 
 driver = GraphDatabase.driver(URI, auth=AUTH)

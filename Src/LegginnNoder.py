@@ -11,9 +11,9 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\1mil\1000000.json"
+FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
-BATCH_SIZE = 7000
+BATCH_SIZE = 15000
 CPU_CORES = 8       # Bruker alle 8 kjernene
 LOG_INTERVAL = 2.0  # Hvor ofte (sekunder) status skal printes til terminalen
 
@@ -89,7 +89,11 @@ def import_persons(tx, batch):
 def import_person_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+        WITH DISTINCT obj.address AS addr, obj.country AS ctry, obj.type AS t
+        WHERE addr IS NOT NULL AND ctry IS NOT NULL AND t IS NOT NULL
+        // Sortering gjør at alle tråder låser i samme rekkefølge -> Mindre deadlocks
+        ORDER BY addr
+        MERGE (a:Address {address: addr, country: ctry, type: t})
     """, batch=batch)
 
 def import_person_sources(tx, batch):
@@ -149,8 +153,16 @@ def import_entitys(tx, batch):
 def import_entity_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+        WITH DISTINCT obj.address AS addr, obj.country AS ctry, obj.type AS t
+        WHERE addr IS NOT NULL AND ctry IS NOT NULL AND t IS NOT NULL
+
+        // Sortering for å unngå deadlock-sykluser
+        WITH addr, ctry, t
+        ORDER BY addr, ctry, t
+
+        MERGE (a:Address {address: addr, country: ctry, type: t})
     """, batch=batch)
+
 
 def import_entity_sources(tx, batch):
     tx.run("""
@@ -229,7 +241,9 @@ def create_constraints(session):
     session.run("CREATE CONSTRAINT ooc_statement_ident IF NOT EXISTS FOR (os:OOCStatement) REQUIRE os.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT person_statement_id IF NOT EXISTS FOR (ps:PersonStatement) REQUIRE ps.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT entity_statement_id IF NOT EXISTS FOR (es:EntityStatement) REQUIRE es.statementID IS UNIQUE")
+    session.run("CREATE CONSTRAINT address_unique IF NOT EXISTS FOR (a:Address) REQUIRE (a.address, a.country, a.type) IS UNIQUE")
     session.run("CREATE CONSTRAINT identifier_uri IF NOT EXISTS FOR (i:Identifier) REQUIRE i.uri IS UNIQUE")
+    
     # VIKTIG: Constraint på Source URL for å håndtere unikhet
     session.run("CREATE CONSTRAINT source_url IF NOT EXISTS FOR (s:Source) REQUIRE s.url IS UNIQUE")
     print("✅ Constraints created for Person, Entity, OOCStatement, PersonStatement, EntityStatement, Identifier, and Source.")
@@ -395,7 +409,8 @@ def worker_process(chunk_info, shared_counter):
                 # ========================
                 # FLUSH BATCHES (Hvis full)
                 # ========================
-                if local_processed_count % 500 == 0:  # Sjekk batchstørrelser
+                FLUSH_EVERY = 3000  # start her
+                if local_processed_count % FLUSH_EVERY == 0:  # Sjekk batchstørrelser
                     with driver.session() as s:
                         if len(batches["personStatement"]) >= BATCH_SIZE:
                             run_with_retry(s, import_person_statements, batches["personStatement"])
