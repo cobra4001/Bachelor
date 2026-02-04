@@ -13,8 +13,8 @@ URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
 FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
-BATCH_SIZE = 15000
-CPU_CORES = 8       # Bruker alle 8 kjernene
+BATCH_SIZE = 7000
+CPU_CORES = 6       # Bruker alle 8 kjernene
 LOG_INTERVAL = 2.0  # Hvor ofte (sekunder) status skal printes til terminalen
 
 
@@ -409,7 +409,7 @@ def worker_process(chunk_info, shared_counter):
                 # ========================
                 # FLUSH BATCHES (Hvis full)
                 # ========================
-                FLUSH_EVERY = 3000  # start her
+                FLUSH_EVERY = 2000  # start her
                 if local_processed_count % FLUSH_EVERY == 0:  # Sjekk batchstørrelser
                     with driver.session() as s:
                         if len(batches["personStatement"]) >= BATCH_SIZE:
@@ -456,8 +456,8 @@ def worker_process(chunk_info, shared_counter):
                     
                     # Oppdater delt teller (trygt med multiprosessering)
                     with shared_counter.get_lock():
-                        shared_counter.value += 500
-                    local_processed_count -= 500 # Nullstill lokal for å unngå dobbelttelling i batchlogikk
+                        shared_counter.value += local_processed_count
+                    local_processed_count = 0 # Nullstill lokal for å unngå dobbelttelling i batchlogikk
 
             # ========================
             # FLUSH REST (Slutten av chunk)
