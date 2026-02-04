@@ -11,7 +11,7 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\100 tusen\100000.json"
+FILE_PATH = r"F:\1mil\1000000.json"
 
 BATCH_SIZE = 7000
 CPU_CORES = 8       # Bruker alle 8 kjernene
@@ -97,7 +97,7 @@ def import_person_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.url IS NOT NULL
-        CREATE (so:Source {url: obj.url})
+        MERGE (so:Source {url: obj.url})
         SET
             so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
             so.description = COALESCE(obj.description, so.description),
@@ -109,7 +109,7 @@ def import_person_sources(tx, batch):
 def import_person_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (i:Identifier {uri: obj.uri})
+        MERGE (i:Identifier {uri: obj.uri})
         SET
             i.id = COALESCE(obj.id, i.id),
             i.schemeName = COALESCE(obj.schemeName, i.schemeName),
@@ -156,7 +156,7 @@ def import_entity_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.url IS NOT NULL
-        CREATE (so:Source {url: obj.url})
+        MERGE (so:Source {url: obj.url})
         SET
             so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
             so.description = COALESCE(obj.description, so.description),
@@ -168,7 +168,7 @@ def import_entity_sources(tx, batch):
 def import_entity_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (i:Identifier {uri: obj.uri})
+        MERGE (i:Identifier {uri: obj.uri})
         SET
             i.id = COALESCE(obj.id, i.id),
             i.scheme = COALESCE(obj.scheme, i.scheme),
@@ -198,7 +198,7 @@ def import_OOC_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.url IS NOT NULL
-        CREATE (so:Source {url: obj.url})
+        MERGE (so:Source {url: obj.url})
         SET
             so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
             so.description = COALESCE(obj.description, so.description),
@@ -210,7 +210,7 @@ def import_OOC_sources(tx, batch):
 def import_OOC_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (i:Identifier {uri: obj.uri})
+        MERGE (i:Identifier {uri: obj.uri})
         SET
             i.id = COALESCE(obj.id, i.id),
             i.schemeName = COALESCE(obj.schemeName, i.schemeName),
