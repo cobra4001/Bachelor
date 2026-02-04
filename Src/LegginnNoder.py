@@ -58,7 +58,7 @@ def parse_share(value):
 def import_person_statements(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (ps:PersonStatement {statementID: obj.statementID})
+        CREATE (ps:PersonStatement {statementID: obj.statementID})
         SET
             ps.personType    = COALESCE(obj.personType, ps.personType),
             ps.statementType = COALESCE(obj.statementType, ps.statementType),
@@ -74,7 +74,7 @@ def import_person_statements(tx, batch):
 def import_persons(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (p:Person {ident: obj.personID})
+        CREATE (p:Person {ident: obj.personID})
         SET
             p.fullName      = COALESCE(obj.fullName, p.fullName),
             p.givenName     = COALESCE(obj.givenName, p.givenName),
@@ -89,7 +89,7 @@ def import_persons(tx, batch):
 def import_person_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+        CREATE (a:Address {address: obj.address, country: obj.country, type: obj.type})
     """, batch=batch)
 
 def import_person_sources(tx, batch):
@@ -97,7 +97,7 @@ def import_person_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.url IS NOT NULL
-        MERGE (so:Source {url: obj.url})
+        CREATE (so:Source {url: obj.url})
         SET
             so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
             so.description = COALESCE(obj.description, so.description),
@@ -109,7 +109,7 @@ def import_person_sources(tx, batch):
 def import_person_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (i:Identifier {uri: obj.uri})
+        CREATE (i:Identifier {uri: obj.uri})
         SET
             i.id = COALESCE(obj.id, i.id),
             i.schemeName = COALESCE(obj.schemeName, i.schemeName),
@@ -119,7 +119,7 @@ def import_person_identifiers(tx, batch):
 def import_entity_statements(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (fs:EntityStatement {statementID: obj.statementID})
+        CREATE (fs:EntityStatement {statementID: obj.statementID})
         SET
             fs.replacesStatements = COALESCE(obj.replacesStatements, fs.replacesStatements),
             fs.statementType   = COALESCE(obj.statementType, fs.statementType),
@@ -135,7 +135,7 @@ def import_entity_statements(tx, batch):
 def import_entitys(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (f:Entity {ident: obj.EntityID})
+        CREATE (f:Entity {ident: obj.EntityID})
         SET
             f.name    = COALESCE(obj.name, f.name),
             f.alternateNames = COALESCE(obj.alternateNames, f.alternateNames),
@@ -149,14 +149,14 @@ def import_entitys(tx, batch):
 def import_entity_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (a:Address {address: obj.address, country: obj.country, type: obj.type})
+        CREATE (a:Address {address: obj.address, country: obj.country, type: obj.type})
     """, batch=batch)
 
 def import_entity_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.url IS NOT NULL
-        MERGE (so:Source {url: obj.url})
+        CREATE (so:Source {url: obj.url})
         SET
             so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
             so.description = COALESCE(obj.description, so.description),
@@ -168,7 +168,7 @@ def import_entity_sources(tx, batch):
 def import_entity_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (i:Identifier {uri: obj.uri})
+        CREATE (i:Identifier {uri: obj.uri})
         SET
             i.id = COALESCE(obj.id, i.id),
             i.scheme = COALESCE(obj.scheme, i.scheme),
@@ -179,7 +179,7 @@ def import_entity_identifiers(tx, batch):
 def import_OOC_statements(tx, batch): 
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (os:OOCStatement {statementID: obj.statementID})   
+        CREATE (os:OOCStatement {statementID: obj.statementID})   
         SET
             os.statementType = COALESCE(obj.statementType, os.statementType),
             os.statementDate = COALESCE(obj.statementDate, os.statementDate),
@@ -198,7 +198,7 @@ def import_OOC_sources(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.url IS NOT NULL
-        MERGE (so:Source {url: obj.url})
+        CREATE (so:Source {url: obj.url})
         SET
             so.assertedBy  = COALESCE(obj.assertedBy, so.assertedBy),
             so.description = COALESCE(obj.description, so.description),
@@ -210,7 +210,7 @@ def import_OOC_sources(tx, batch):
 def import_OOC_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (i:Identifier {uri: obj.uri})
+        CREATE (i:Identifier {uri: obj.uri})
         SET
             i.id = COALESCE(obj.id, i.id),
             i.schemeName = COALESCE(obj.schemeName, i.schemeName),
@@ -223,14 +223,16 @@ def import_OOC_identifiers(tx, batch):
 # CONSTRAINTS (Kjøres i main)
 # ========================
 def create_constraints(session):
-    # Person, Entity, OOC
+    # Person, Entity, OOC, PersonStatement, EntityStatement, Identifier, Source
     session.run("CREATE CONSTRAINT person_ident IF NOT EXISTS FOR (p:Person) REQUIRE p.ident IS UNIQUE")
     session.run("CREATE CONSTRAINT entity_ident IF NOT EXISTS FOR (e:Entity) REQUIRE e.ident IS UNIQUE")
     session.run("CREATE CONSTRAINT ooc_statement_ident IF NOT EXISTS FOR (os:OOCStatement) REQUIRE os.statementID IS UNIQUE")
-    
-    # VIKTIG: Constraint på Source URL for å unngå duplikater ved multiprosessering
+    session.run("CREATE CONSTRAINT person_statement_id IF NOT EXISTS FOR (ps:PersonStatement) REQUIRE ps.statementID IS UNIQUE")
+    session.run("CREATE CONSTRAINT entity_statement_id IF NOT EXISTS FOR (es:EntityStatement) REQUIRE es.statementID IS UNIQUE")
+    session.run("CREATE CONSTRAINT identifier_uri IF NOT EXISTS FOR (i:Identifier) REQUIRE i.uri IS UNIQUE")
+    # VIKTIG: Constraint på Source URL for å håndtere unikhet
     session.run("CREATE CONSTRAINT source_url IF NOT EXISTS FOR (s:Source) REQUIRE s.url IS UNIQUE")
-    print("✅ Constraints created for Person, Entity, OOCStatement, and Source.")
+    print("✅ Constraints created for Person, Entity, OOCStatement, PersonStatement, EntityStatement, Identifier, and Source.")
 
 
 # ========================
