@@ -89,17 +89,11 @@ def import_persons(tx, batch):
 def import_nationalities(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        WITH DISTINCT obj.code AS code, obj.name AS name
-        WHERE code IS NOT NULL OR name IS NOT NULL
-        
-        // Sortering for å unngå deadlocks
-        WITH code, name
-        ORDER BY code, name
-        
-        MERGE (n:Nationality {code: code, name: name})
+        WITH obj WHERE obj.code IS NOT NULL
+        ORDER BY obj.code
+        MERGE (n:Nationality {code: obj.code})
+        SET n.name = COALESCE(obj.name, n.name)
     """, batch=batch)
-
-
 
 def import_person_addresses(tx, batch):
     tx.run("""
@@ -345,14 +339,14 @@ def worker_process(chunk_info, shared_counter):
                     })
 
                     for nat in obj.get("nationalities", []):
-                        if nat.get("code") or nat.get("name"):
+                        if nat.get("code"):  # Kun hvis code finnes
                             batches["nationalities"].append({
                                 "code": nat.get("code"),
-                                "name": nat.get("name")
+                                "name": nat.get("name"),
+                                "person_id": sid
                             })
 
                     
-
                     for addr in obj.get("addresses", []):
                         if addr.get("address"):
                             batches["personaddress"].append({"address": addr.get("address"), "country": addr.get("country"), "type": addr.get("type")})

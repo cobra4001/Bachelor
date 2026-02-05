@@ -13,7 +13,7 @@ URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
 FILE_PATH = r"F:\1mil\1000000.json"
 
-BATCH_SIZE = 250000
+BATCH_SIZE = 150000
 CPU_CORES = 8
 LOG_INTERVAL = 2.0
 
@@ -64,6 +64,7 @@ def create_describes_person_relationships(tx, batch):
     """, batch=batch)
 
 
+
 def create_person_has_address_relationships(tx, batch):
     """Person -[:HAS_ADDRESS]-> Address"""
     tx.run("""
@@ -71,17 +72,21 @@ def create_person_has_address_relationships(tx, batch):
         MATCH (p:Person {ident: obj.personID})
         MATCH (a:Address {address: obj.address, country: obj.country, type: obj.type})
         MERGE (p)-[:HAS_ADDRESS]->(a)
-    """, batch=batch)
+""", batch=batch)
+
 
 
 def create_person_has_nationality_relationships(tx, batch):
-    """Person -[:HAS_NATIONALITY]-> Nationality"""
     tx.run("""
         UNWIND $batch AS obj
+        WITH obj WHERE obj.personID IS NOT NULL AND obj.code IS NOT NULL
+        ORDER BY obj.personID, obj.code
         MATCH (p:Person {ident: obj.personID})
-        MATCH (n:Nationality {code: obj.code, name: obj.name})
+        MATCH (n:Nationality {code: obj.code})
         MERGE (p)-[:HAS_NATIONALITY]->(n)
-""", batch=batch)
+    """, batch=batch)
+
+
 
 
 def create_person_statement_has_source_relationships(tx, batch):
@@ -168,6 +173,8 @@ def create_person_is_interested_party_relationships(tx, batch):
     """Person -[:IS_INTERESTED_PARTY]-> OOCStatement"""
     tx.run("""
         UNWIND $batch AS obj
+        // Bare hvis person finnes
+        WITH obj WHERE obj.interestedParty_describedByPersonStatement IS NOT NULL
         MATCH (p:Person {ident: obj.interestedParty_describedByPersonStatement})
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MERGE (p)-[:IS_INTERESTED_PARTY]->(os)
@@ -178,39 +185,23 @@ def create_entity_is_interested_party_relationships(tx, batch):
     """Entity -[:IS_INTERESTED_PARTY]-> OOCStatement"""
     tx.run("""
         UNWIND $batch AS obj
+        // Bare hvis entity finnes
+        WITH obj WHERE obj.interestedParty_describedByEntityStatement IS NOT NULL
         MATCH (e:Entity {ident: obj.interestedParty_describedByEntityStatement})
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MERGE (e)-[:IS_INTERESTED_PARTY]->(os)
     """, batch=batch)
 
 
-def create_ooc_interest_in_person_relationships(tx, batch):
-    """OOCStatement -[:INTEREST_IN]-> Person (with properties)"""
-    tx.run("""
-        UNWIND $batch AS obj
-        MATCH (os:OOCStatement {statementID: obj.statementID})
-        MATCH (p:Person {ident: obj.interested_id})
-        
-        MERGE (os)-[r:INTEREST_IN]->(p)
-        SET r.type = obj.interest_type,
-            r.startDate = obj.startDate,
-            r.share_exact = obj.share_exact,
-            r.share_maximum = obj.share_maximum,
-            r.share_minimum = obj.share_minimum,
-            r.endDate = obj.endDate,
-            r.details = obj.details,
-            r.share_exclusiveMaximum = obj.share_exclusiveMaximum,
-            r.share_exclusiveMinimum = obj.share_exclusiveMinimum
-    """, batch=batch)
-
 
 def create_ooc_interest_in_entity_relationships(tx, batch):
     """OOCStatement -[:INTEREST_IN]-> Entity (with properties)"""
     tx.run("""
         UNWIND $batch AS obj
+        // INTEREST_IN skal kun peke til Entity
+        WITH obj WHERE obj.interested_id IS NOT NULL
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MATCH (e:Entity {ident: obj.interested_id})
-        
         MERGE (os)-[r:INTEREST_IN]->(e)
         SET r.type = obj.interest_type,
             r.startDate = obj.startDate,
@@ -222,7 +213,6 @@ def create_ooc_interest_in_entity_relationships(tx, batch):
             r.share_exclusiveMaximum = obj.share_exclusiveMaximum,
             r.share_exclusiveMinimum = obj.share_exclusiveMinimum
     """, batch=batch)
-
 
 # ========================
 # WORKER PROCESS FOR RELATIONSHIPS
@@ -250,7 +240,6 @@ def worker_process(chunk_info, shared_counter):
         "ooc_has_identifier": [],
         "person_is_interested_party": [],
         "entity_is_interested_party": [],
-        "ooc_interest_in_person": [],
         "ooc_interest_in_entity": []
     }
 
@@ -303,11 +292,10 @@ def worker_process(chunk_info, shared_counter):
                             })
                     # Person -[:HAS_NATIONALITY]-> Nationality
                     for nat in obj.get("nationalities", []):
-                        if nat.get("code") or nat.get("name"):
+                        if nat.get("code"):
                             batches["person_has_nationality"].append({
                                 "personID": sid,
-                                "code": nat.get("code"),
-                                "name": nat.get("name")
+                                "code": nat.get("code")  # <- Kun code!
                             })
 
                     # PersonStatement -[:HAS_SOURCE]-> Source
@@ -412,10 +400,8 @@ def worker_process(chunk_info, shared_counter):
                         }
                         
                         if interested_person_id:
-                            batches["ooc_interest_in_person"].append(interest_data)
-                        elif interested_entity_id:
                             batches["ooc_interest_in_entity"].append(interest_data)
-
+                        
                 local_processed_count += 1
 
                 # ========================
@@ -467,9 +453,6 @@ def worker_process(chunk_info, shared_counter):
                         if len(batches["ooc_has_identifier"]) >= BATCH_SIZE:
                             run_with_retry(s, create_ooc_has_identifier_relationships, batches["ooc_has_identifier"])
                             batches["ooc_has_identifier"].clear()
-                        if len(batches["ooc_interest_in_person"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_ooc_interest_in_person_relationships, batches["ooc_interest_in_person"])
-                            batches["ooc_interest_in_person"].clear()
                         if len(batches["ooc_interest_in_entity"]) >= BATCH_SIZE:
                             run_with_retry(s, create_ooc_interest_in_entity_relationships, batches["ooc_interest_in_entity"])
                             batches["ooc_interest_in_entity"].clear()
@@ -512,8 +495,6 @@ def worker_process(chunk_info, shared_counter):
                     run_with_retry(s, create_ooc_has_source_relationships, batches["ooc_has_source"])
                 if batches["ooc_has_identifier"]:
                     run_with_retry(s, create_ooc_has_identifier_relationships, batches["ooc_has_identifier"])
-                if batches["ooc_interest_in_person"]:
-                    run_with_retry(s, create_ooc_interest_in_person_relationships, batches["ooc_interest_in_person"])
                 if batches["ooc_interest_in_entity"]:
                     run_with_retry(s, create_ooc_interest_in_entity_relationships, batches["ooc_interest_in_entity"])
             
