@@ -610,6 +610,7 @@ if __name__ == "__main__":
         so = s.run("MATCH (so:Source) RETURN count(so) AS c").single()["c"]
         id = s.run("MATCH (i:Identifier) RETURN count(i) AS c").single()["c"]
         ad = s.run("MATCH (a:Address) RETURN count(a) AS c").single()["c"]
+        na = s.run("MATCH (n:Nationality) RETURN count(n) AS c").single()["c"]
     main_driver.close()
 
     print(f"PersonStatement-noder: {ps}")
@@ -620,3 +621,4 @@ if __name__ == "__main__":
     print(f"Source-noder: {so}")
     print(f"Identifier-noder: {id}")
     print(f"Address-noder: {ad}")
+    print(f"Nationality-noder: {na}")
