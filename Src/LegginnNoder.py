@@ -11,10 +11,10 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\OpenOwnership full fil\register.json"
+FILE_PATH = r"F:\1mil\1000000.json"
 
-BATCH_SIZE = 7000
-CPU_CORES = 6       # Bruker alle 8 kjernene
+BATCH_SIZE = 250000
+CPU_CORES = 8       # Bruker alle 8 kjernene
 LOG_INTERVAL = 2.0  # Hvor ofte (sekunder) status skal printes til terminalen
 
 
@@ -85,6 +85,21 @@ def import_persons(tx, batch):
             p.CountryCode   = COALESCE(obj.Countrycode, p.CountryCode),
             p.Country       = COALESCE(obj.Country, p.Country)
     """, batch=batch)
+
+def import_nationalities(tx, batch):
+    tx.run("""
+        UNWIND $batch AS obj
+        WITH DISTINCT obj.code AS code, obj.name AS name
+        WHERE code IS NOT NULL OR name IS NOT NULL
+        
+        // Sortering for å unngå deadlocks
+        WITH code, name
+        ORDER BY code, name
+        
+        MERGE (n:Nationality {code: code, name: name})
+    """, batch=batch)
+
+
 
 def import_person_addresses(tx, batch):
     tx.run("""
@@ -263,7 +278,7 @@ def worker_process(chunk_info, shared_counter):
     
     # Lokale batch-lister
     batches = {
-        "personStatement": [], "person": [], "personaddress": [], "personsource": [], "personidentifier": [],
+        "personStatement": [], "person": [], "nationalities": [], "personaddress": [], "personsource": [], "personidentifier": [],
         "entityStatement": [], "entity": [], "entityaddress": [], "entitysource": [], "entityidentifier": [],
         "OOCStatement": [], "OOCsource": [], "OOCidentifier": []
     }
@@ -316,8 +331,8 @@ def worker_process(chunk_info, shared_counter):
 
                     names = obj.get("names", [])
                     name = names[0] if names else {}
-                    nationalites = obj.get("nationalities", [])
-                    national = nationalites[0] if nationalites else {}
+                  
+                    
 
                     batches["person"].append({ 
                         "personID": sid,
@@ -326,10 +341,17 @@ def worker_process(chunk_info, shared_counter):
                         "familyName": name.get("familyName"),
                         "type": name.get("type"),
                         "birthDate": obj.get("birthDate"),
-                        "personType": obj.get("personType"),
-                        "Countrycode": national.get("code"),
-                        "Country": national.get("name")
+                        "personType": obj.get("personType")
                     })
+
+                    for nat in obj.get("nationalities", []):
+                        if nat.get("code") or nat.get("name"):
+                            batches["nationalities"].append({
+                                "code": nat.get("code"),
+                                "name": nat.get("name")
+                            })
+
+                    
 
                     for addr in obj.get("addresses", []):
                         if addr.get("address"):
@@ -418,6 +440,10 @@ def worker_process(chunk_info, shared_counter):
                         if len(batches["person"]) >= BATCH_SIZE:
                             run_with_retry(s, import_persons, batches["person"])
                             batches["person"].clear()
+                        if len(batches["nationalities"]) >= BATCH_SIZE:
+                            run_with_retry(s, import_nationalities, batches["nationalities"])
+                            batches["nationalities"].clear()
+
                         if len(batches["personaddress"]) >= BATCH_SIZE:
                             run_with_retry(s, import_person_addresses, batches["personaddress"])
                             batches["personaddress"].clear()
@@ -467,6 +493,8 @@ def worker_process(chunk_info, shared_counter):
                     run_with_retry(s, import_person_statements, batches["personStatement"])
                 if batches["person"]:
                     run_with_retry(s, import_persons, batches["person"])
+                if batches["nationalities"]: 
+                    run_with_retry(s, import_nationalities, batches["nationalities"])
                 if batches["personaddress"]:
                     run_with_retry(s, import_person_addresses, batches["personaddress"])
                 if batches["personsource"]:
