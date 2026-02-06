@@ -18,6 +18,75 @@ CPU_CORES = 8
 LOG_INTERVAL = 2.0
 
 
+
+# ========================
+# FLUSH BATCHES FUNKSJON
+# ========================
+def flush_batches(driver, batches, shared_counter=None, local_processed_count=0):
+    """Flush alle batcher til Neo4j, uansett størrelse."""
+    with driver.session() as s:
+        if batches["describes_person"]:
+            run_with_retry(s, create_describes_person_relationships, batches["describes_person"])
+            batches["describes_person"].clear()
+
+        if batches["person_has_address"]:
+            run_with_retry(s, create_person_has_address_relationships, batches["person_has_address"])
+            batches["person_has_address"].clear()
+
+        if batches["person_has_nationality"]:
+            run_with_retry(s, create_person_has_nationality_relationships, batches["person_has_nationality"])
+            batches["person_has_nationality"].clear()
+
+        if batches["source_has_person_statement"]:
+            run_with_retry(s, create_source_has_person_statement, batches["source_has_person_statement"])
+            batches["source_has_person_statement"].clear()
+
+        if batches["person_statement_has_identifier"]:
+            run_with_retry(s, create_person_statement_has_identifier_relationships, batches["person_statement_has_identifier"])
+            batches["person_statement_has_identifier"].clear()
+
+        if batches["describes_entity"]:
+            run_with_retry(s, create_describes_entity_relationships, batches["describes_entity"])
+            batches["describes_entity"].clear()
+
+        if batches["entity_has_address"]:
+            run_with_retry(s, create_entity_has_address_relationships, batches["entity_has_address"])
+            batches["entity_has_address"].clear()
+
+        if batches["source_has_entity_statement"]:
+            run_with_retry(s, create_source_has_entity_statement, batches["source_has_entity_statement"])
+            batches["source_has_entity_statement"].clear()
+
+        if batches["entity_statement_has_identifier"]:
+            run_with_retry(s, create_entity_statement_has_identifier_relationships, batches["entity_statement_has_identifier"])
+            batches["entity_statement_has_identifier"].clear()
+
+        if batches["person_is_interested_party"]:
+            run_with_retry(s, create_person_is_interested_party_relationships, batches["person_is_interested_party"])
+            batches["person_is_interested_party"].clear()
+
+        if batches["entity_is_interested_party"]:
+            run_with_retry(s, create_entity_is_interested_party_relationships, batches["entity_is_interested_party"])
+            batches["entity_is_interested_party"].clear()
+
+        if batches["source_has_ooc_statement"]:
+            run_with_retry(s, create_source_has_ooc_statement, batches["source_has_ooc_statement"])
+            batches["source_has_ooc_statement"].clear()
+
+        if batches["ooc_interest_in_entity"]:
+            run_with_retry(s, create_ooc_interest_in_entity_relationships, batches["ooc_interest_in_entity"])
+            batches["ooc_interest_in_entity"].clear()
+
+        if batches["ooc_has_control"]:
+            run_with_retry(s, create_ooc_has_control_relationships, batches["ooc_has_control"])
+            batches["ooc_has_control"].clear()
+
+    # Oppdater delt teller hvis oppgitt
+    if shared_counter is not None and local_processed_count > 0:
+        with shared_counter.get_lock():
+            shared_counter.value += local_processed_count
+
+
 def run_with_retry(session, func, batch, max_retries=5):
     """
     Kjør en skrivetransaksjon med enkel retry ved TransientError (inkl. deadlocks).
@@ -158,16 +227,6 @@ def create_source_has_ooc_statement(tx, batch):
     """, batch=batch)
 
 
-def create_ooc_has_identifier_relationships(tx, batch):
-    """OOCStatement -[:HAS_IDENTIFIER]-> Identifier"""
-    tx.run("""
-        UNWIND $batch AS obj
-        MATCH (os:OOCStatement {statementID: obj.statementID})
-        MATCH (i:Identifier {uri: obj.uri})
-        MERGE (os)-[:HAS_IDENTIFIER]->(i)
-    """, batch=batch)
-
-
 def create_person_is_interested_party_relationships(tx, batch):
     """Person -[:IS_INTERESTED_PARTY]-> OOCStatement"""
     tx.run("""
@@ -226,44 +285,37 @@ def create_ooc_has_control_relationships(tx, batch):
 # WORKER PROCESS FOR RELATIONSHIPS
 # ========================
 def worker_process(chunk_info, shared_counter):
-    """
-    Kjøres av hver prosess. Leser en del av filen og lager relasjoner.
-    """
     file_path, start_byte, end_byte, worker_id = chunk_info
-    
     driver = GraphDatabase.driver(URI, auth=AUTH)
-    
-    # Lokale batch-lister for relasjoner
+
     batches = {
-    "describes_person": [],
-    "person_has_address": [],
-    "person_has_nationality": [],
-    "source_has_person_statement": [], 
-    "person_statement_has_identifier": [],
-    "describes_entity": [],
-    "entity_has_address": [],
-    "source_has_entity_statement": [], 
-    "entity_statement_has_identifier": [],
-    "person_is_interested_party": [],
-    "entity_is_interested_party": [],
-    "source_has_ooc_statement": [],     
-    "ooc_has_identifier": [],
-    "ooc_interest_in_entity": [],
-    "ooc_has_control": []
-}
+        "describes_person": [],
+        "person_has_address": [],
+        "person_has_nationality": [],
+        "source_has_person_statement": [], 
+        "person_statement_has_identifier": [],
+        "describes_entity": [],
+        "entity_has_address": [],
+        "source_has_entity_statement": [], 
+        "entity_statement_has_identifier": [],
+        "person_is_interested_party": [],
+        "entity_is_interested_party": [],
+        "source_has_ooc_statement": [],     
+        "ooc_has_identifier": [],
+        "ooc_interest_in_entity": [],
+        "ooc_has_control": []
+    }
 
     local_processed_count = 0
+    FLUSH_EVERY = 2000
 
     try:
         with open(file_path, "rb") as f:
             f.seek(start_byte)
             if start_byte > 0:
-                f.readline()
+                f.readline()  # skip partial line
 
-            while True:
-                if f.tell() > end_byte:
-                    break
-                
+            while f.tell() <= end_byte:
                 line = f.readline()
                 if not line:
                     break
@@ -276,21 +328,13 @@ def worker_process(chunk_info, shared_counter):
                 stype = obj.get("statementType")
                 if not stype:
                     continue
-
                 sid = obj.get("statementID")
 
                 # ========================
                 # RELATIONSHIP MAPPING
                 # ========================
-
                 if stype == "personStatement":
-                    # PersonStatement -[:DESCRIBES_PERSON]-> Person
-                    batches["describes_person"].append({
-                        "statementID": sid,
-                        "personID": sid
-                    })
-
-                    # Person -[:HAS_ADDRESS]-> Address
+                    batches["describes_person"].append({"statementID": sid, "personID": sid})
                     for addr in obj.get("addresses", []):
                         if addr.get("address"):
                             batches["person_has_address"].append({
@@ -299,24 +343,18 @@ def worker_process(chunk_info, shared_counter):
                                 "country": addr.get("country"),
                                 "type": addr.get("type")
                             })
-                    # Person -[:HAS_NATIONALITY]-> Nationality
                     for nat in obj.get("nationalities", []):
                         if nat.get("code"):
                             batches["person_has_nationality"].append({
                                 "personID": sid,
-                                "code": nat.get("code")  # <- Kun code!
+                                "code": nat.get("code")
                             })
-
-                  # Source -[:HAS_STATEMENT]-> Personstatement
                     source = obj.get("source")
                     if source and source.get("url"):
                         batches["source_has_person_statement"].append({
                             "statementID": sid,
                             "url": source.get("url")
                         })
-
-
-                    # PersonStatement -[:HAS_IDENTIFIER]-> Identifier
                     for ident in obj.get("identifiers", []):
                         if ident.get("uri"):
                             batches["person_statement_has_identifier"].append({
@@ -325,13 +363,7 @@ def worker_process(chunk_info, shared_counter):
                             })
 
                 elif stype == "entityStatement":
-                    # EntityStatement -[:DESCRIBES_ENTITY]-> Entity
-                    batches["describes_entity"].append({
-                        "statementID": sid,
-                        "EntityID": sid
-                    })
-
-                    # Entity -[:HAS_ADDRESS]-> Address
+                    batches["describes_entity"].append({"statementID": sid, "EntityID": sid})
                     for addr in obj.get("addresses", []):
                         if addr.get("address"):
                             batches["entity_has_address"].append({
@@ -340,16 +372,14 @@ def worker_process(chunk_info, shared_counter):
                                 "country": addr.get("country"),
                                 "type": addr.get("type")
                             })
-
-                    # Source -[:HAS_STATEMENT]-> EntityStatement
                     source = obj.get("source")
                     if source and source.get("url"):
                         batches["source_has_entity_statement"].append({
                             "statementID": sid,
                             "url": source.get("url")
                         })
+                        
 
-                    # EntityStatement -[:HAS_IDENTIFIER]-> Identifier
                     for ident in obj.get("identifiers", []):
                         if ident.get("uri"):
                             batches["entity_statement_has_identifier"].append({
@@ -358,53 +388,34 @@ def worker_process(chunk_info, shared_counter):
                             })
 
                 elif stype == "ownershipOrControlStatement":
-                    # Person/Entity -[:IS_INTERESTED_PARTY]-> OOCStatement
                     interested_party = obj.get("interestedParty", {})
-                    interested_person_id = interested_party.get("describedByPersonStatement")
-                    interested_entity_id = interested_party.get("describedByEntityStatement")
-                    
-                    if interested_person_id:
+                    if interested_party.get("describedByPersonStatement"):
                         batches["person_is_interested_party"].append({
                             "statementID": sid,
-                            "interestedParty_describedByPersonStatement": interested_person_id
+                            "interestedParty_describedByPersonStatement": interested_party.get("describedByPersonStatement")
                         })
-                    
-                    if interested_entity_id:
+                    if interested_party.get("describedByEntityStatement"):
                         batches["entity_is_interested_party"].append({
                             "statementID": sid,
-                            "interestedParty_describedByEntityStatement": interested_entity_id
+                            "interestedParty_describedByEntityStatement": interested_party.get("describedByEntityStatement")
                         })
-
-                    # Source -[:HAS_OOC_STATEMENT]-> OOCStatement
                     source = obj.get("source")
                     if source and source.get("url"):
                         batches["source_has_ooc_statement"].append({
                             "statementID": sid,
                             "url": source.get("url")
                         })
+                    
 
-                    # OOCStatement -[:HAS_IDENTIFIER]-> Identifier
-                    for ident in obj.get("identifiers", []):
-                        if ident.get("uri"):
-                            batches["ooc_has_identifier"].append({
-                                "statementID": sid,
-                                "uri": ident.get("uri")
-                            })
-
-                    # FIX: OOCStatement -[:INTERESTED_IN]-> Entity (subject/firma som eies)
                     subject = obj.get("subject", {})
                     subject_entity_id = subject.get("describedByEntityStatement")
-
-                    if subject_entity_id:  # Kun hvis subject (firma) finnes
+                    if subject_entity_id:
                         interests = obj.get("interests", [])
-                        
-                        # 1️⃣ Lag INTERESTED_IN for hver aksje
                         for interest in interests:
                             share_data = interest.get("share", {})
-                            
-                            interest_data = {
+                            batches["ooc_interest_in_entity"].append({
                                 "statementID": sid,
-                                "subject_id": subject_entity_id,  # peker til subject (firma som eies)
+                                "subject_id": subject_entity_id,
                                 "interest_type": interest.get("type"),
                                 "startDate": interest.get("startDate"),
                                 "share_exact": parse_share(share_data.get("exact")),
@@ -414,125 +425,29 @@ def worker_process(chunk_info, shared_counter):
                                 "details": interest.get("interestLevel"),
                                 "share_exclusiveMaximum": share_data.get("exclusiveMaximum"),
                                 "share_exclusiveMinimum": share_data.get("exclusiveMinimum")
-                            }
-                            batches["ooc_interest_in_entity"].append(interest_data)
-                        
-                        # 2️⃣ Lag HAS_CONTROL kun hvis det **ikke finnes aksjer**
-                        if not interests:  # Ingen aksjer → kun kontroll
-                            control_data = {
+                            })
+                        if not interests:
+                            batches["ooc_has_control"].append({
                                 "statementID": sid,
                                 "entity_id": subject_entity_id
-                            }
-                            batches["ooc_has_control"].append(control_data)
+                            })
 
-                    local_processed_count += 1
-
+                local_processed_count += 1
 
                 # ========================
-                # FLUSH BATCHES
+                # FLUSH PERIODISK
                 # ========================
-                FLUSH_EVERY = 2000
                 if local_processed_count % FLUSH_EVERY == 0:
-                    with driver.session() as s:
-                        if len(batches["describes_person"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_describes_person_relationships, batches["describes_person"])
-                            batches["describes_person"].clear()
-                        if len(batches["person_has_address"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_person_has_address_relationships, batches["person_has_address"])
-                            batches["person_has_address"].clear()
-
-                        if len(batches["person_has_nationality"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_person_has_nationality_relationships, batches["person_has_nationality"])
-                            batches["person_has_nationality"].clear()
-                       
-                        if len(batches["source_has_person_statement"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_source_has_person_statement, batches["source_has_person_statement"])
-                            batches["source_has_person_statement"].clear()
-                        if len(batches["person_statement_has_identifier"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_person_statement_has_identifier_relationships, batches["person_statement_has_identifier"])
-                            batches["person_statement_has_identifier"].clear()
-
-                        if len(batches["describes_entity"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_describes_entity_relationships, batches["describes_entity"])
-                            batches["describes_entity"].clear()
-                        if len(batches["entity_has_address"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_entity_has_address_relationships, batches["entity_has_address"])
-                            batches["entity_has_address"].clear()
-                        if len(batches["source_has_entity_statement"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_source_has_entity_statement, batches["source_has_entity_statement"])
-                            batches["source_has_entity_statement"].clear()
-                        if len(batches["entity_statement_has_identifier"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_entity_statement_has_identifier_relationships, batches["entity_statement_has_identifier"])
-                            batches["entity_statement_has_identifier"].clear()
-
-                        if len(batches["person_is_interested_party"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_person_is_interested_party_relationships, batches["person_is_interested_party"])
-                            batches["person_is_interested_party"].clear()
-                        if len(batches["entity_is_interested_party"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_entity_is_interested_party_relationships, batches["entity_is_interested_party"])
-                            batches["entity_is_interested_party"].clear()
-                        if len(batches["source_has_ooc_statement"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_source_has_ooc_statement, batches["source_has_ooc_statement"])
-                            batches["source_has_ooc_statement"].clear()
-                        if len(batches["ooc_has_identifier"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_ooc_has_identifier_relationships, batches["ooc_has_identifier"])
-                            batches["ooc_has_identifier"].clear()
-                        if len(batches["ooc_interest_in_entity"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_ooc_interest_in_entity_relationships, batches["ooc_interest_in_entity"])
-                            batches["ooc_interest_in_entity"].clear()
-                        if batches["ooc_has_control"]:
-                            run_with_retry(s, create_ooc_has_control_relationships, batches["ooc_has_control"])
-                            batches["ooc_has_control"].clear()
-                    
-                    with shared_counter.get_lock():
-                        shared_counter.value += local_processed_count
-                    local_processed_count = 0
+                    flush_batches(driver, batches, shared_counter, FLUSH_EVERY)
 
             # ========================
-            # FLUSH REST
+            # FLUSH REST OF BATCHES
             # ========================
-            with driver.session() as s:
-                if batches["describes_person"]:
-                    run_with_retry(s, create_describes_person_relationships, batches["describes_person"])
-                if batches["person_has_address"]:
-                    run_with_retry(s, create_person_has_address_relationships, batches["person_has_address"])
-
-                if len(batches["person_has_nationality"]) >= BATCH_SIZE:
-                    run_with_retry(s, create_person_has_nationality_relationships, batches["person_has_nationality"])
-                            
-                if batches["source_has_person_statement"]:
-                    run_with_retry(s, create_source_has_person_statement, batches["source_has_person_statement"])
-                if batches["person_statement_has_identifier"]:
-                    run_with_retry(s, create_person_statement_has_identifier_relationships, batches["person_statement_has_identifier"])
-
-                if batches["describes_entity"]:
-                    run_with_retry(s, create_describes_entity_relationships, batches["describes_entity"])
-                if batches["entity_has_address"]:
-                    run_with_retry(s, create_entity_has_address_relationships, batches["entity_has_address"])
-                if batches["source_has_entity_statement"]:
-                    run_with_retry(s, create_source_has_entity_statement, batches["source_has_entity_statement"])
-                if batches["entity_statement_has_identifier"]:
-                    run_with_retry(s, create_entity_statement_has_identifier_relationships, batches["entity_statement_has_identifier"])
-
-                if batches["person_is_interested_party"]:
-                    run_with_retry(s, create_person_is_interested_party_relationships, batches["person_is_interested_party"])
-                if batches["entity_is_interested_party"]:
-                    run_with_retry(s, create_entity_is_interested_party_relationships, batches["entity_is_interested_party"])
-                if batches["source_has_ooc_statement"]:
-                    run_with_retry(s, create_source_has_ooc_statement, batches["source_has_ooc_statement"])
-                if batches["ooc_has_identifier"]:
-                    run_with_retry(s, create_ooc_has_identifier_relationships, batches["ooc_has_identifier"])
-                if batches["ooc_interest_in_entity"]:
-                    run_with_retry(s, create_ooc_interest_in_entity_relationships, batches["ooc_interest_in_entity"])
-                if batches["ooc_has_control"]:
-                    run_with_retry(s, create_ooc_has_control_relationships, batches["ooc_has_control"])
-                        
-                
+            # Beregn hvor mange som ikke er flushet enda
+            remaining = local_processed_count % FLUSH_EVERY
+            if remaining > 0:  # ← LEGG TIL DENNE LINJEN
+                flush_batches(driver, batches, shared_counter, remaining)
             
-            if local_processed_count > 0:
-                with shared_counter.get_lock():
-                    shared_counter.value += local_processed_count
-
     except Exception as e:
         print(f"🚨 Worker {worker_id} feilet: {e}")
     finally:

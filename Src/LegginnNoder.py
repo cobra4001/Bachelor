@@ -227,18 +227,6 @@ def import_OOC_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
-def import_OOC_identifiers(tx, batch):
-    tx.run("""
-        UNWIND $batch AS obj
-        MERGE (i:Identifier {uri: obj.uri})
-        SET
-            i.id = COALESCE(obj.id, i.id),
-            i.schemeName = COALESCE(obj.schemeName, i.schemeName),
-            i.scheme = COALESCE(obj.scheme, i.scheme),
-            i.uri = COALESCE(obj.uri, i.uri)
-        WITH i, obj
-    """, batch=batch)
-
 # ========================
 # CONSTRAINTS (Kjøres i main)
 # ========================
@@ -273,7 +261,7 @@ def worker_process(chunk_info, shared_counter):
     batches = {
         "personStatement": [], "person": [], "nationalities": [], "personaddress": [], "personsource": [], "personidentifier": [],
         "entityStatement": [], "entity": [], "entityaddress": [], "entitysource": [], "entityidentifier": [],
-        "OOCStatement": [], "OOCsource": [], "OOCidentifier": []
+        "OOCStatement": [], "OOCsource": []
     }
 
     local_processed_count = 0
@@ -414,10 +402,6 @@ def worker_process(chunk_info, shared_counter):
                     if source and source.get("url"):
                         batches["OOCsource"].append(source)
 
-                    for ident in obj.get("identifiers", []):
-                        if ident.get("uri"):
-                            batches["OOCidentifier"].append(ident)
-
                 local_processed_count += 1
 
                 # ========================
@@ -468,9 +452,6 @@ def worker_process(chunk_info, shared_counter):
                         if len(batches["OOCsource"]) >= BATCH_SIZE:
                             run_with_retry(s, import_OOC_sources, batches["OOCsource"])
                             batches["OOCsource"].clear()
-                        if len(batches["OOCidentifier"]) >= BATCH_SIZE:
-                            run_with_retry(s, import_OOC_identifiers, batches["OOCidentifier"])
-                            batches["OOCidentifier"].clear()
                     
                     # Oppdater delt teller (trygt med multiprosessering)
                     with shared_counter.get_lock():
@@ -509,8 +490,6 @@ def worker_process(chunk_info, shared_counter):
                     run_with_retry(s, import_OOC_statements, batches["OOCStatement"])
                 if batches["OOCsource"]:
                     run_with_retry(s, import_OOC_sources, batches["OOCsource"])
-                if batches["OOCidentifier"]:
-                    run_with_retry(s, import_OOC_identifiers, batches["OOCidentifier"])
             
             # Oppdater teller med resten
             if local_processed_count > 0:
