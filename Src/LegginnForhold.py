@@ -11,9 +11,9 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\1mil\1000000.json"
+FILE_PATH = r"F:\100 tusen\100000.json"
 
-BATCH_SIZE = 150000
+BATCH_SIZE = 500
 CPU_CORES = 8
 LOG_INTERVAL = 2.0
 
@@ -80,7 +80,6 @@ def create_person_has_nationality_relationships(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.personID IS NOT NULL AND obj.code IS NOT NULL
-        ORDER BY obj.personID, obj.code
         MATCH (p:Person {ident: obj.personID})
         MATCH (n:Nationality {code: obj.code})
         MERGE (p)-[:HAS_NATIONALITY]->(n)
@@ -89,13 +88,13 @@ def create_person_has_nationality_relationships(tx, batch):
 
 
 
-def create_person_statement_has_source_relationships(tx, batch):
-    """PersonStatement -[:HAS_SOURCE]-> Source"""
+def create_source_has_person_statement(tx, batch):
+    """Source -[:HAS_STATEMENT]-> PersonStatement"""
     tx.run("""
         UNWIND $batch AS obj
+        MATCH (s:Source {url: obj.url})
         MATCH (ps:PersonStatement {statementID: obj.statementID})
-        MATCH (so:Source {url: obj.url})
-        MERGE (ps)-[:HAS_SOURCE]->(so)
+        MERGE (s)-[:HAS_STATEMENT]->(ps)
     """, batch=batch)
 
 
@@ -129,13 +128,13 @@ def create_entity_has_address_relationships(tx, batch):
     """, batch=batch)
 
 
-def create_entity_statement_has_source_relationships(tx, batch):
-    """EntityStatement -[:HAS_SOURCE]-> Source"""
+def create_source_has_entity_statement(tx, batch):
+    """Source -[:HAS_STATEMENT]-> EntityStatement"""
     tx.run("""
         UNWIND $batch AS obj
+        MATCH (s:Source {url: obj.url})
         MATCH (es:EntityStatement {statementID: obj.statementID})
-        MATCH (so:Source {url: obj.url})
-        MERGE (es)-[:HAS_SOURCE]->(so)
+        MERGE (s)-[:HAS_STATEMENT]->(es)
     """, batch=batch)
 
 
@@ -149,13 +148,13 @@ def create_entity_statement_has_identifier_relationships(tx, batch):
     """, batch=batch)
 
 
-def create_ooc_has_source_relationships(tx, batch):
-    """OOCStatement -[:HAS_SOURCE]-> Source"""
+def create_source_has_ooc_statement(tx, batch):
+    """Source -[:HAS_STATEMENT]-> OOCStatement"""
     tx.run("""
         UNWIND $batch AS obj
+        MATCH (s:Source {url: obj.url})
         MATCH (os:OOCStatement {statementID: obj.statementID})
-        MATCH (so:Source {url: obj.url})
-        MERGE (os)-[:HAS_SOURCE]->(so)
+        MERGE (s)-[:HAS_STATEMENT]->(os)
     """, batch=batch)
 
 
@@ -227,21 +226,21 @@ def worker_process(chunk_info, shared_counter):
     
     # Lokale batch-lister for relasjoner
     batches = {
-        "describes_person": [],
-        "person_has_address": [],
-        "person_has_nationality": [],
-        "person_statement_has_source": [],
-        "person_statement_has_identifier": [],
-        "describes_entity": [],
-        "entity_has_address": [],
-        "entity_statement_has_source": [],
-        "entity_statement_has_identifier": [],
-        "ooc_has_source": [],
-        "ooc_has_identifier": [],
-        "person_is_interested_party": [],
-        "entity_is_interested_party": [],
-        "ooc_interest_in_entity": []
-    }
+    "describes_person": [],
+    "person_has_address": [],
+    "person_has_nationality": [],
+    "source_has_person_statement": [], 
+    "person_statement_has_identifier": [],
+    "describes_entity": [],
+    "entity_has_address": [],
+    "source_has_entity_statement": [], 
+    "entity_statement_has_identifier": [],
+    "person_is_interested_party": [],
+    "entity_is_interested_party": [],
+    "source_has_ooc_statement": [],     
+    "ooc_has_identifier": [],
+    "ooc_interest_in_entity": []
+}
 
     local_processed_count = 0
 
@@ -298,13 +297,14 @@ def worker_process(chunk_info, shared_counter):
                                 "code": nat.get("code")  # <- Kun code!
                             })
 
-                    # PersonStatement -[:HAS_SOURCE]-> Source
+                  # Source -[:HAS_PERSON_STATEMENT]-> Personstatement
                     source = obj.get("source")
                     if source and source.get("url"):
-                        batches["person_statement_has_source"].append({
+                        batches["source_has_person_statement"].append({
                             "statementID": sid,
                             "url": source.get("url")
                         })
+
 
                     # PersonStatement -[:HAS_IDENTIFIER]-> Identifier
                     for ident in obj.get("identifiers", []):
@@ -331,10 +331,10 @@ def worker_process(chunk_info, shared_counter):
                                 "type": addr.get("type")
                             })
 
-                    # EntityStatement -[:HAS_SOURCE]-> Source
+                    # Source -[:HAS_ENTITY_STATEMENT]-> EntityStatement
                     source = obj.get("source")
                     if source and source.get("url"):
-                        batches["entity_statement_has_source"].append({
+                        batches["source_has_entity_statement"].append({
                             "statementID": sid,
                             "url": source.get("url")
                         })
@@ -364,10 +364,10 @@ def worker_process(chunk_info, shared_counter):
                             "interestedParty_describedByEntityStatement": interested_entity_id
                         })
 
-                    # OOCStatement -[:HAS_SOURCE]-> Source
+                    # Source -[:HAS_OOC_STATEMENT]-> OOCStatement
                     source = obj.get("source")
                     if source and source.get("url"):
-                        batches["ooc_has_source"].append({
+                        batches["source_has_ooc_statement"].append({
                             "statementID": sid,
                             "url": source.get("url")
                         })
@@ -421,9 +421,9 @@ def worker_process(chunk_info, shared_counter):
                             run_with_retry(s, create_person_has_nationality_relationships, batches["person_has_nationality"])
                             batches["person_has_nationality"].clear()
                        
-                        if len(batches["person_statement_has_source"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_person_statement_has_source_relationships, batches["person_statement_has_source"])
-                            batches["person_statement_has_source"].clear()
+                        if len(batches["source_has_person_statement"]) >= BATCH_SIZE:
+                            run_with_retry(s, create_source_has_person_statement, batches["source_has_person_statement"])
+                            batches["source_has_person_statement"].clear()
                         if len(batches["person_statement_has_identifier"]) >= BATCH_SIZE:
                             run_with_retry(s, create_person_statement_has_identifier_relationships, batches["person_statement_has_identifier"])
                             batches["person_statement_has_identifier"].clear()
@@ -434,9 +434,9 @@ def worker_process(chunk_info, shared_counter):
                         if len(batches["entity_has_address"]) >= BATCH_SIZE:
                             run_with_retry(s, create_entity_has_address_relationships, batches["entity_has_address"])
                             batches["entity_has_address"].clear()
-                        if len(batches["entity_statement_has_source"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_entity_statement_has_source_relationships, batches["entity_statement_has_source"])
-                            batches["entity_statement_has_source"].clear()
+                        if len(batches["source_has_entity_statement"]) >= BATCH_SIZE:
+                            run_with_retry(s, create_source_has_entity_statement, batches["source_has_entity_statement"])
+                            batches["source_has_entity_statement"].clear()
                         if len(batches["entity_statement_has_identifier"]) >= BATCH_SIZE:
                             run_with_retry(s, create_entity_statement_has_identifier_relationships, batches["entity_statement_has_identifier"])
                             batches["entity_statement_has_identifier"].clear()
@@ -447,9 +447,9 @@ def worker_process(chunk_info, shared_counter):
                         if len(batches["entity_is_interested_party"]) >= BATCH_SIZE:
                             run_with_retry(s, create_entity_is_interested_party_relationships, batches["entity_is_interested_party"])
                             batches["entity_is_interested_party"].clear()
-                        if len(batches["ooc_has_source"]) >= BATCH_SIZE:
-                            run_with_retry(s, create_ooc_has_source_relationships, batches["ooc_has_source"])
-                            batches["ooc_has_source"].clear()
+                        if len(batches["source_has_ooc_statement"]) >= BATCH_SIZE:
+                            run_with_retry(s, create_source_has_ooc_statement, batches["source_has_ooc_statement"])
+                            batches["source_has_ooc_statement"].clear()
                         if len(batches["ooc_has_identifier"]) >= BATCH_SIZE:
                             run_with_retry(s, create_ooc_has_identifier_relationships, batches["ooc_has_identifier"])
                             batches["ooc_has_identifier"].clear()
@@ -473,8 +473,8 @@ def worker_process(chunk_info, shared_counter):
                 if len(batches["person_has_nationality"]) >= BATCH_SIZE:
                     run_with_retry(s, create_person_has_nationality_relationships, batches["person_has_nationality"])
                             
-                if batches["person_statement_has_source"]:
-                    run_with_retry(s, create_person_statement_has_source_relationships, batches["person_statement_has_source"])
+                if batches["source_has_person_statement"]:
+                    run_with_retry(s, create_source_has_person_statement, batches["source_has_person_statement"])
                 if batches["person_statement_has_identifier"]:
                     run_with_retry(s, create_person_statement_has_identifier_relationships, batches["person_statement_has_identifier"])
 
@@ -482,8 +482,8 @@ def worker_process(chunk_info, shared_counter):
                     run_with_retry(s, create_describes_entity_relationships, batches["describes_entity"])
                 if batches["entity_has_address"]:
                     run_with_retry(s, create_entity_has_address_relationships, batches["entity_has_address"])
-                if batches["entity_statement_has_source"]:
-                    run_with_retry(s, create_entity_statement_has_source_relationships, batches["entity_statement_has_source"])
+                if batches["source_has_entity_statement"]:
+                    run_with_retry(s, create_source_has_entity_statement, batches["source_has_entity_statement"])
                 if batches["entity_statement_has_identifier"]:
                     run_with_retry(s, create_entity_statement_has_identifier_relationships, batches["entity_statement_has_identifier"])
 
@@ -491,8 +491,8 @@ def worker_process(chunk_info, shared_counter):
                     run_with_retry(s, create_person_is_interested_party_relationships, batches["person_is_interested_party"])
                 if batches["entity_is_interested_party"]:
                     run_with_retry(s, create_entity_is_interested_party_relationships, batches["entity_is_interested_party"])
-                if batches["ooc_has_source"]:
-                    run_with_retry(s, create_ooc_has_source_relationships, batches["ooc_has_source"])
+                if batches["source_has_ooc_statement"]:
+                    run_with_retry(s, create_source_has_ooc_statement, batches["source_has_ooc_statement"])
                 if batches["ooc_has_identifier"]:
                     run_with_retry(s, create_ooc_has_identifier_relationships, batches["ooc_has_identifier"])
                 if batches["ooc_interest_in_entity"]:
@@ -580,7 +580,7 @@ if __name__ == "__main__":
         describes_entity = s.run("MATCH ()-[r:DESCRIBES_ENTITY]->() RETURN count(r) AS c").single()["c"]
         has_nationality = s.run("MATCH ()-[r:HAS_NATIONALITY]->() RETURN count(r) AS c").single()["c"]
         has_addr = s.run("MATCH ()-[r:HAS_ADDRESS]->() RETURN count(r) AS c").single()["c"]
-        has_src = s.run("MATCH ()-[r:HAS_SOURCE]->() RETURN count(r) AS c").single()["c"]
+        src_st = s.run("MATCH ()-[r:HAS_STATEMENT]->() RETURN count(r) AS c").single()["c"]
         has_id = s.run("MATCH ()-[r:HAS_IDENTIFIER]->() RETURN count(r) AS c").single()["c"]
         is_interested = s.run("MATCH ()-[r:IS_INTERESTED_PARTY]->() RETURN count(r) AS c").single()["c"]
         interest_in = s.run("MATCH ()-[r:INTEREST_IN]->() RETURN count(r) AS c").single()["c"]
@@ -590,7 +590,7 @@ if __name__ == "__main__":
     print(f"DESCRIBES_ENTITY relasjoner: {describes_entity}")
     print(f"HAS_NATIONALITY relasjoner: {has_nationality}")
     print(f"HAS_ADDRESS relasjoner: {has_addr}")
-    print(f"HAS_SOURCE relasjoner: {has_src}")
+    print(f"HAS_STATEMENT relasjoner: {src_st}")
     print(f"HAS_IDENTIFIER relasjoner: {has_id}")
     print(f"IS_INTERESTED_PARTY relasjoner: {is_interested}")
     print(f"INTEREST_IN relasjoner: {interest_in}")

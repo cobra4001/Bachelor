@@ -11,7 +11,7 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\1mil\1000000.json"
+FILE_PATH = r"F:\100 tusen\100000.json"
 
 BATCH_SIZE = 250000
 CPU_CORES = 8       # Bruker alle 8 kjernene
@@ -90,7 +90,6 @@ def import_nationalities(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.code IS NOT NULL
-        ORDER BY obj.code
         MERGE (n:Nationality {code: obj.code})
         SET n.name = COALESCE(obj.name, n.name)
     """, batch=batch)
@@ -343,7 +342,6 @@ def worker_process(chunk_info, shared_counter):
                             batches["nationalities"].append({
                                 "code": nat.get("code"),
                                 "name": nat.get("name"),
-                                "person_id": sid
                             })
 
                     
@@ -537,6 +535,36 @@ def monitor_progress(shared_counter, total_file_size):
         # Hvis vi vil stoppe (dette er en enkel implementasjon, main dreper prosessen når ferdig)
         print(f"📊 Processed objects: {current_count} | Tid: {elapsed}")
 
+def prepopulate_nationalities(session, file_path):
+    """Les gjennom filen én gang og lag alle unike Nationality-noder"""
+    print("🌍 Pre-populerer Nationality-noder...")
+    
+    unique_nationalities = {}  # {code: name}
+    
+    with open(file_path, "rb") as f:
+        for line in f:
+            try:
+                obj = orjson.loads(line)
+                if obj.get("statementType") == "personStatement":
+                    for nat in obj.get("nationalities", []):
+                        code = nat.get("code")
+                        if code:
+                            unique_nationalities[code] = nat.get("name")
+            except:
+                continue
+    
+    print(f"   Funnet {len(unique_nationalities)} unike nasjonaliteter")
+    
+    # Opprett alle på en gang
+    batch = [{"code": code, "name": name} for code, name in unique_nationalities.items()]
+    
+    session.execute_write(lambda tx: tx.run("""
+        UNWIND $batch AS obj
+        MERGE (n:Nationality {code: obj.code})
+        SET n.name = COALESCE(obj.name, n.name)
+    """, batch=batch))
+    
+    print(f"   ✅ {len(unique_nationalities)} Nationality-noder opprettet")
 # ========================
 # MAIN
 # ========================
@@ -550,6 +578,7 @@ if __name__ == "__main__":
     main_driver.verify_connectivity()
     with main_driver.session() as s:
         create_constraints(s)
+        prepopulate_nationalities(s, FILE_PATH)  # ← Pre-populer Nationality-noder
     main_driver.close()
     
     # 2. Forbered Multiprosessering
