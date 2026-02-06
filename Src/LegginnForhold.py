@@ -197,10 +197,9 @@ def create_ooc_interest_in_entity_relationships(tx, batch):
     """OOCStatement -[:INTEREST_IN]-> Entity (with properties)"""
     tx.run("""
         UNWIND $batch AS obj
-        // INTEREST_IN skal kun peke til Entity
-        WITH obj WHERE obj.interested_id IS NOT NULL
+        WITH obj WHERE obj.subject_id IS NOT NULL
         MATCH (os:OOCStatement {statementID: obj.statementID})
-        MATCH (e:Entity {ident: obj.interested_id})
+        MATCH (e:Entity {ident: obj.subject_id})
         MERGE (os)-[r:INTEREST_IN]->(e)
         SET r.type = obj.interest_type,
             r.startDate = obj.startDate,
@@ -297,7 +296,7 @@ def worker_process(chunk_info, shared_counter):
                                 "code": nat.get("code")  # <- Kun code!
                             })
 
-                  # Source -[:HAS_PERSON_STATEMENT]-> Personstatement
+                  # Source -[:HAS_STATEMENT]-> Personstatement
                     source = obj.get("source")
                     if source and source.get("url"):
                         batches["source_has_person_statement"].append({
@@ -331,7 +330,7 @@ def worker_process(chunk_info, shared_counter):
                                 "type": addr.get("type")
                             })
 
-                    # Source -[:HAS_ENTITY_STATEMENT]-> EntityStatement
+                    # Source -[:HAS_STATEMENT]-> EntityStatement
                     source = obj.get("source")
                     if source and source.get("url"):
                         batches["source_has_entity_statement"].append({
@@ -349,8 +348,9 @@ def worker_process(chunk_info, shared_counter):
 
                 elif stype == "ownershipOrControlStatement":
                     # Person/Entity -[:IS_INTERESTED_PARTY]-> OOCStatement
-                    interested_person_id = obj.get("interestedParty", {}).get("describedByPersonStatement")
-                    interested_entity_id = obj.get("interestedParty", {}).get("describedByEntityStatement")
+                    interested_party = obj.get("interestedParty", {})
+                    interested_person_id = interested_party.get("describedByPersonStatement")
+                    interested_entity_id = interested_party.get("describedByEntityStatement")
                     
                     if interested_person_id:
                         batches["person_is_interested_party"].append({
@@ -380,26 +380,29 @@ def worker_process(chunk_info, shared_counter):
                                 "uri": ident.get("uri")
                             })
 
-                    # OOCStatement -[:INTEREST_IN]-> Person/Entity (with properties)
-                    interests = obj.get("interests", [])
-                    for interest in interests:
-                        share_data = interest.get("share", {})
-                        
-                        interest_data = {
-                            "statementID": sid,
-                            "interested_id": interested_person_id or interested_entity_id,
-                            "interest_type": interest.get("type"),
-                            "startDate": interest.get("startDate"),
-                            "share_exact": parse_share(share_data.get("exact")),
-                            "share_maximum": parse_share(share_data.get("maximum")),
-                            "share_minimum": parse_share(share_data.get("minimum")),
-                            "endDate": interest.get("endDate"),
-                            "details": interest.get("interestLevel"),
-                            "share_exclusiveMaximum": share_data.get("exclusiveMaximum"),
-                            "share_exclusiveMinimum": share_data.get("exclusiveMinimum")
-                        }
-                        
-                        if interested_person_id:
+                    # FIX: OOCStatement -[:INTEREST_IN]-> Entity (subject/firma som eies)
+                    subject = obj.get("subject", {})
+                    subject_entity_id = subject.get("describedByEntityStatement")
+                    
+                    if subject_entity_id:  # Kun hvis subject (firma) finnes
+                        interests = obj.get("interests", [])
+                        for interest in interests:
+                            share_data = interest.get("share", {})
+                            
+                            interest_data = {
+                                "statementID": sid,
+                                "subject_id": subject_entity_id,  # ← ENDRET: Peker til subject (firma som eies)
+                                "interest_type": interest.get("type"),
+                                "startDate": interest.get("startDate"),
+                                "share_exact": parse_share(share_data.get("exact")),
+                                "share_maximum": parse_share(share_data.get("maximum")),
+                                "share_minimum": parse_share(share_data.get("minimum")),
+                                "endDate": interest.get("endDate"),
+                                "details": interest.get("interestLevel"),
+                                "share_exclusiveMaximum": share_data.get("exclusiveMaximum"),
+                                "share_exclusiveMinimum": share_data.get("exclusiveMinimum")
+                            }
+                            
                             batches["ooc_interest_in_entity"].append(interest_data)
                         
                 local_processed_count += 1
