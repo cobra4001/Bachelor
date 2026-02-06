@@ -253,13 +253,13 @@ def create_entity_is_interested_party_relationships(tx, batch):
 
 
 def create_ooc_interest_in_entity_relationships(tx, batch):
-    """OOCStatement -[:INTERESTED_IN]-> Entity (with properties)"""
+    """OOCStatement -[:DESCRIBES_OWNERSHIP]-> Entity (with properties)"""
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.subject_id IS NOT NULL
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MATCH (e:Entity {ident: obj.subject_id})
-        MERGE (os)-[r:INTERESTED_IN]->(e)
+        MERGE (os)-[r:DESCRIBES_OWNERSHIP]->(e)
         SET r.type = obj.interest_type,
             r.startDate = obj.startDate,
             r.share_exact = obj.share_exact,
@@ -272,13 +272,13 @@ def create_ooc_interest_in_entity_relationships(tx, batch):
     """, batch=batch)
 
 def create_ooc_has_control_relationships(tx, batch):
-    """OOCStatement -[:HAS_CONTROL]-> Entity"""
+    """OOCStatement -[:DESCRIBES_CONTROL]-> Entity"""
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.entity_id IS NOT NULL
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MATCH (e:Entity {ident: obj.entity_id})
-        MERGE (os)-[:HAS_CONTROL]->(e)
+        MERGE (os)-[:DESCRIBES_CONTROL]->(e)
     """, batch=batch)
 
 # ========================
@@ -529,8 +529,8 @@ if __name__ == "__main__":
         src_st = s.run("MATCH ()-[r:HAS_STATEMENT]->() RETURN count(r) AS c").single()["c"]
         has_id = s.run("MATCH ()-[r:HAS_IDENTIFIER]->() RETURN count(r) AS c").single()["c"]
         is_interested = s.run("MATCH ()-[r:IS_INTERESTED_PARTY]->() RETURN count(r) AS c").single()["c"]
-        interest_in = s.run("MATCH ()-[r:INTERESTED_IN]->() RETURN count(r) AS c").single()["c"]
-        has_control = s.run("MATCH ()-[r:HAS_CONTROL]->() RETURN count(r) AS c").single()["c"]
+        ownership = s.run("MATCH ()-[r:DESCRIBES_OWNERSHIP]->() RETURN count(r) AS c").single()["c"]
+        control = s.run("MATCH ()-[r:DESCRIBES_CONTROL]->() RETURN count(r) AS c").single()["c"]
     main_driver.close()
 
     print(f"DESCRIBES_PERSON relasjoner: {describes_person}")
@@ -540,5 +540,5 @@ if __name__ == "__main__":
     print(f"HAS_STATEMENT relasjoner: {src_st}")
     print(f"HAS_IDENTIFIER relasjoner: {has_id}")
     print(f"IS_INTERESTED_PARTY relasjoner: {is_interested}")
-    print(f"INTERESTED_IN relasjoner: {interest_in}")
-    print(f"HAS_CONTROL relasjoner: {has_control}")
+    print(f"DESCRIBES_OWNERSHIP relasjoner: {ownership}")
+    print(f"DESCRIBES_CONTROL relasjoner: {control}")
