@@ -194,13 +194,13 @@ def create_entity_is_interested_party_relationships(tx, batch):
 
 
 def create_ooc_interest_in_entity_relationships(tx, batch):
-    """OOCStatement -[:INTEREST_IN]-> Entity (with properties)"""
+    """OOCStatement -[:INTERESTED_IN]-> Entity (with properties)"""
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.subject_id IS NOT NULL
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MATCH (e:Entity {ident: obj.subject_id})
-        MERGE (os)-[r:INTEREST_IN]->(e)
+        MERGE (os)-[r:INTERESTED_IN]->(e)
         SET r.type = obj.interest_type,
             r.startDate = obj.startDate,
             r.share_exact = obj.share_exact,
@@ -210,6 +210,16 @@ def create_ooc_interest_in_entity_relationships(tx, batch):
             r.details = obj.details,
             r.share_exclusiveMaximum = obj.share_exclusiveMaximum,
             r.share_exclusiveMinimum = obj.share_exclusiveMinimum
+    """, batch=batch)
+
+def create_ooc_has_control_relationships(tx, batch):
+    """OOCStatement -[:HAS_CONTROL]-> Entity"""
+    tx.run("""
+        UNWIND $batch AS obj
+        WITH obj WHERE obj.entity_id IS NOT NULL
+        MATCH (os:OOCStatement {statementID: obj.statementID})
+        MATCH (e:Entity {ident: obj.entity_id})
+        MERGE (os)-[:HAS_CONTROL]->(e)
     """, batch=batch)
 
 # ========================
@@ -238,7 +248,8 @@ def worker_process(chunk_info, shared_counter):
     "entity_is_interested_party": [],
     "source_has_ooc_statement": [],     
     "ooc_has_identifier": [],
-    "ooc_interest_in_entity": []
+    "ooc_interest_in_entity": [],
+    "ooc_has_control": []
 }
 
     local_processed_count = 0
@@ -380,18 +391,20 @@ def worker_process(chunk_info, shared_counter):
                                 "uri": ident.get("uri")
                             })
 
-                    # FIX: OOCStatement -[:INTEREST_IN]-> Entity (subject/firma som eies)
+                    # FIX: OOCStatement -[:INTERESTED_IN]-> Entity (subject/firma som eies)
                     subject = obj.get("subject", {})
                     subject_entity_id = subject.get("describedByEntityStatement")
-                    
+
                     if subject_entity_id:  # Kun hvis subject (firma) finnes
                         interests = obj.get("interests", [])
+                        
+                        # 1️⃣ Lag INTERESTED_IN for hver aksje
                         for interest in interests:
                             share_data = interest.get("share", {})
                             
                             interest_data = {
                                 "statementID": sid,
-                                "subject_id": subject_entity_id,  # ← ENDRET: Peker til subject (firma som eies)
+                                "subject_id": subject_entity_id,  # peker til subject (firma som eies)
                                 "interest_type": interest.get("type"),
                                 "startDate": interest.get("startDate"),
                                 "share_exact": parse_share(share_data.get("exact")),
@@ -402,10 +415,18 @@ def worker_process(chunk_info, shared_counter):
                                 "share_exclusiveMaximum": share_data.get("exclusiveMaximum"),
                                 "share_exclusiveMinimum": share_data.get("exclusiveMinimum")
                             }
-                            
                             batches["ooc_interest_in_entity"].append(interest_data)
                         
-                local_processed_count += 1
+                        # 2️⃣ Lag HAS_CONTROL kun hvis det **ikke finnes aksjer**
+                        if not interests:  # Ingen aksjer → kun kontroll
+                            control_data = {
+                                "statementID": sid,
+                                "entity_id": subject_entity_id
+                            }
+                            batches["ooc_has_control"].append(control_data)
+
+                    local_processed_count += 1
+
 
                 # ========================
                 # FLUSH BATCHES
@@ -459,6 +480,9 @@ def worker_process(chunk_info, shared_counter):
                         if len(batches["ooc_interest_in_entity"]) >= BATCH_SIZE:
                             run_with_retry(s, create_ooc_interest_in_entity_relationships, batches["ooc_interest_in_entity"])
                             batches["ooc_interest_in_entity"].clear()
+                        if batches["ooc_has_control"]:
+                            run_with_retry(s, create_ooc_has_control_relationships, batches["ooc_has_control"])
+                            batches["ooc_has_control"].clear()
                     
                     with shared_counter.get_lock():
                         shared_counter.value += local_processed_count
@@ -500,6 +524,10 @@ def worker_process(chunk_info, shared_counter):
                     run_with_retry(s, create_ooc_has_identifier_relationships, batches["ooc_has_identifier"])
                 if batches["ooc_interest_in_entity"]:
                     run_with_retry(s, create_ooc_interest_in_entity_relationships, batches["ooc_interest_in_entity"])
+                if batches["ooc_has_control"]:
+                    run_with_retry(s, create_ooc_has_control_relationships, batches["ooc_has_control"])
+                        
+                
             
             if local_processed_count > 0:
                 with shared_counter.get_lock():
@@ -586,7 +614,8 @@ if __name__ == "__main__":
         src_st = s.run("MATCH ()-[r:HAS_STATEMENT]->() RETURN count(r) AS c").single()["c"]
         has_id = s.run("MATCH ()-[r:HAS_IDENTIFIER]->() RETURN count(r) AS c").single()["c"]
         is_interested = s.run("MATCH ()-[r:IS_INTERESTED_PARTY]->() RETURN count(r) AS c").single()["c"]
-        interest_in = s.run("MATCH ()-[r:INTEREST_IN]->() RETURN count(r) AS c").single()["c"]
+        interest_in = s.run("MATCH ()-[r:INTERESTED_IN]->() RETURN count(r) AS c").single()["c"]
+        has_control = s.run("MATCH ()-[r:HAS_CONTROL]->() RETURN count(r) AS c").single()["c"]
     main_driver.close()
 
     print(f"DESCRIBES_PERSON relasjoner: {describes_person}")
@@ -596,4 +625,5 @@ if __name__ == "__main__":
     print(f"HAS_STATEMENT relasjoner: {src_st}")
     print(f"HAS_IDENTIFIER relasjoner: {has_id}")
     print(f"IS_INTERESTED_PARTY relasjoner: {is_interested}")
-    print(f"INTEREST_IN relasjoner: {interest_in}")
+    print(f"INTERESTED_IN relasjoner: {interest_in}")
+    print(f"HAS_CONTROL relasjoner: {has_control}")
