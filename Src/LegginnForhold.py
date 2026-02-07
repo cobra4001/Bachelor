@@ -11,7 +11,7 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\100 tusen\100000.json"
+FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
 BATCH_SIZE = 500
 CPU_CORES = 8

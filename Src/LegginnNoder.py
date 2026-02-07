@@ -11,7 +11,7 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\100 tusen\100000.json"
+FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
 BATCH_SIZE = 7000
 CPU_CORES = 8       # Bruker alle 8 kjernene
@@ -58,7 +58,7 @@ def parse_share(value):
 def import_person_statements(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (ps:PersonStatement {statementID: obj.statementID})
+        MERGE (ps:PersonStatement {statementID: obj.statementID})
         SET
             ps.personType    = COALESCE(obj.personType, ps.personType),
             ps.statementType = COALESCE(obj.statementType, ps.statementType),
@@ -74,7 +74,7 @@ def import_person_statements(tx, batch):
 def import_persons(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (p:Person {ident: obj.personID})
+        MERGE (p:Person {ident: obj.personID})
         SET
             p.fullName      = COALESCE(obj.fullName, p.fullName),
             p.givenName     = COALESCE(obj.givenName, p.givenName),
@@ -131,7 +131,7 @@ def import_person_identifiers(tx, batch):
 def import_entity_statements(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (fs:EntityStatement {statementID: obj.statementID})
+        MERGE (fs:EntityStatement {statementID: obj.statementID})
         SET
             fs.replacesStatements = COALESCE(obj.replacesStatements, fs.replacesStatements),
             fs.statementType   = COALESCE(obj.statementType, fs.statementType),
@@ -147,7 +147,7 @@ def import_entity_statements(tx, batch):
 def import_entitys(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (f:Entity {ident: obj.EntityID})
+        MERGE (f:Entity {ident: obj.EntityID})
         SET
             f.name    = COALESCE(obj.name, f.name),
             f.alternateNames = COALESCE(obj.alternateNames, f.alternateNames),
@@ -199,7 +199,7 @@ def import_entity_identifiers(tx, batch):
 def import_OOC_statements(tx, batch): 
     tx.run("""
         UNWIND $batch AS obj
-        CREATE (os:OOCStatement {statementID: obj.statementID})   
+        MERGE (os:OOCStatement {statementID: obj.statementID})   
         SET
             os.statementType = COALESCE(obj.statementType, os.statementType),
             os.statementDate = COALESCE(obj.statementDate, os.statementDate),
