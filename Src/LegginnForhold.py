@@ -13,7 +13,7 @@ URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
 FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
-BATCH_SIZE = 500
+BATCH_SIZE = 3000
 CPU_CORES = 8
 LOG_INTERVAL = 2.0
 
