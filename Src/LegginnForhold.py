@@ -11,7 +11,7 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\1mil\1000000.json"
+FILE_PATH = r"F:\100 tusen\100000.json"
 
 BATCH_SIZE = 3000
 CPU_CORES = 8
@@ -352,13 +352,16 @@ def worker_process(chunk_info, shared_counter):
                             "url": source.get("url")
                         })
 
-                    # For personStatement -> Identifier
-                    for ident in obj.get("personIdentifiers", []):
-                        merge_key = ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
-                        batches["person_statement_has_identifier"].append({
-                            "statementID": sid,
-                            "mergeKey": merge_key
-                        })
+                    # PersonStatement -> Identifier
+                    for ident in obj.get("identifiers", []):
+                        scheme = ident.get("schemeName")
+                        ident_id = ident.get("id")
+                        uri = ident.get("uri") or (f"{scheme}:{ident_id}" if scheme and ident_id else None)
+                        if uri:
+                            batches["person_statement_has_identifier"].append({
+                                "statementID": sid,
+                                "mergeKey": uri
+                            })
 
                 elif stype == "entityStatement":
                     batches["describes_entity"].append({"statementID": sid, "EntityID": sid})
