@@ -516,7 +516,7 @@ if __name__ == "__main__":
     # Sluttrapport
     print("\n🎉 Fase 2 ferdig (Alle relasjoner opprettet)!")
     print(f"Total tid: {datetime.now() - start_time_total}")
-    print(f"Totalt antall objekter prosessert: {shared_counter.value}")
+    print(f"Totalt antall objekter lest ifølge teller: {shared_counter.value}")
 
     # Sjekk relasjoner i DB
     print("\n🔍 Sjekker relasjons-tall...")
