@@ -11,7 +11,7 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\OpenOwnership full fil\register.json"
+FILE_PATH = r"F:\1mil\1000000.json"
 
 BATCH_SIZE = 7000
 CPU_CORES = 8       # Bruker alle 8 kjernene
@@ -118,14 +118,15 @@ def import_person_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
+# --- Person identifier nodes ---
 def import_person_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (i:Identifier {uri: obj.uri})
+        MERGE (i:Identifier {uri: obj.mergeKey})
         SET
             i.id = COALESCE(obj.id, i.id),
             i.schemeName = COALESCE(obj.schemeName, i.schemeName),
-            i.uri = COALESCE(obj.uri, i.uri)    
+            i.uri = COALESCE(obj.uri, i.uri)
     """, batch=batch)
 
 def import_entity_statements(tx, batch):
@@ -185,10 +186,11 @@ def import_entity_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
+# --- Entity identifier nodes ---
 def import_entity_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (i:Identifier {uri: obj.uri})
+        MERGE (i:Identifier {uri: obj.mergeKey})
         SET
             i.id = COALESCE(obj.id, i.id),
             i.scheme = COALESCE(obj.scheme, i.scheme),
@@ -341,9 +343,17 @@ def worker_process(chunk_info, shared_counter):
                     if source and source.get("url"):
                         batches["personsource"].append(source) # Pass source dict directly, url is key
 
-                    for ident in obj.get("identifiers", []):
-                        if ident.get("uri"):
-                            batches["personidentifier"].append(ident)
+
+                    # --- Person identifier nodes ---
+                    for ident in obj.get("personIdentifiers", []):
+                        # Lag mergeKey: uri hvis finnes, ellers schemeName:id
+                        merge_key = ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
+                        
+                        # Legg til node-batch
+                        batches["personidentifier"].append({
+                            **ident,
+                            "mergeKey": merge_key
+                        })
 
                 elif stype == "entityStatement":
                     batches["entityStatement"].append({
@@ -378,9 +388,16 @@ def worker_process(chunk_info, shared_counter):
                     if source and source.get("url"):
                         batches["entitysource"].append(source)
 
+                   # --- Entity identifier nodes ---
                     for ident in obj.get("identifiers", []):
-                        if ident.get("uri"):
-                            batches["entityidentifier"].append(ident)
+                        # Lag mergeKey: uri hvis finnes, ellers schemeName:id
+                        merge_key = ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
+                        
+                        # Legg til node-batch
+                        batches["entityidentifier"].append({
+                            **ident,
+                            "mergeKey": merge_key
+                        })
 
                 elif stype == "ownershipOrControlStatement":
                     batches["OOCStatement"].append({

@@ -11,7 +11,7 @@ from neo4j.exceptions import TransientError
 # ========================
 URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
-FILE_PATH = r"F:\OpenOwnership full fil\register.json"
+FILE_PATH = r"F:\1mil\1000000.json"
 
 BATCH_SIZE = 3000
 CPU_CORES = 8
@@ -167,15 +167,14 @@ def create_source_has_person_statement(tx, batch):
     """, batch=batch)
 
 
+
 def create_person_statement_has_identifier_relationships(tx, batch):
-    """PersonStatement -[:HAS_IDENTIFIER]-> Identifier"""
     tx.run("""
         UNWIND $batch AS obj
         MATCH (ps:PersonStatement {statementID: obj.statementID})
-        MATCH (i:Identifier {uri: obj.uri})
+        MATCH (i:Identifier {uri: obj.mergeKey})
         MERGE (ps)-[:HAS_IDENTIFIER]->(i)
     """, batch=batch)
-
 
 def create_describes_entity_relationships(tx, batch):
     """EntityStatement -[:DESCRIBES_ENTITY]-> Entity"""
@@ -206,16 +205,13 @@ def create_source_has_entity_statement(tx, batch):
         MERGE (s)-[:HAS_STATEMENT]->(es)
     """, batch=batch)
 
-
 def create_entity_statement_has_identifier_relationships(tx, batch):
-    """EntityStatement -[:HAS_IDENTIFIER]-> Identifier"""
     tx.run("""
-        UNWIND $batch AS obj
-        MATCH (es:EntityStatement {statementID: obj.statementID})
-        MATCH (i:Identifier {uri: obj.uri})
-        MERGE (es)-[:HAS_IDENTIFIER]->(i)
+      UNWIND $batch AS obj
+      MATCH (es:EntityStatement {statementID: obj.statementID})
+      MATCH (i:Identifier {uri: obj.mergeKey})
+      MERGE (es)-[:HAS_IDENTIFIER]->(i)
     """, batch=batch)
-
 
 def create_source_has_ooc_statement(tx, batch):
     """Source -[:HAS_STATEMENT]-> OOCStatement"""
@@ -355,12 +351,14 @@ def worker_process(chunk_info, shared_counter):
                             "statementID": sid,
                             "url": source.get("url")
                         })
-                    for ident in obj.get("identifiers", []):
-                        if ident.get("uri"):
-                            batches["person_statement_has_identifier"].append({
-                                "statementID": sid,
-                                "uri": ident.get("uri")
-                            })
+
+                    # For personStatement -> Identifier
+                    for ident in obj.get("personIdentifiers", []):
+                        merge_key = ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
+                        batches["person_statement_has_identifier"].append({
+                            "statementID": sid,
+                            "mergeKey": merge_key
+                        })
 
                 elif stype == "entityStatement":
                     batches["describes_entity"].append({"statementID": sid, "EntityID": sid})
@@ -380,12 +378,13 @@ def worker_process(chunk_info, shared_counter):
                         })
                         
 
+                     # For entityStatement -> Identifier
                     for ident in obj.get("identifiers", []):
-                        if ident.get("uri"):
-                            batches["entity_statement_has_identifier"].append({
-                                "statementID": sid,
-                                "uri": ident.get("uri")
-                            })
+                        merge_key = ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
+                        batches["entity_statement_has_identifier"].append({
+                            "statementID": sid,
+                            "mergeKey": merge_key
+                        })
 
                 elif stype == "ownershipOrControlStatement":
                     interested_party = obj.get("interestedParty", {})
