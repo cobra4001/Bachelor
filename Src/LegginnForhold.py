@@ -249,23 +249,26 @@ def create_entity_is_interested_party_relationships(tx, batch):
 
 
 def create_ooc_interest_in_entity_relationships(tx, batch):
-    """OOCStatement -[:DESCRIBES_OWNERSHIP]-> Entity (with properties)"""
+    """
+    OOCStatement -[:DESCRIBES_OWNERSHIP {type, share, startDate, endDate, ...}]-> Entity
+    Lager én relasjon per interest, slik at både 'shareholding' og 'voting-rights' beholdes.
+    """
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.subject_id IS NOT NULL
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MATCH (e:Entity {ident: obj.subject_id})
-        MERGE (os)-[r:DESCRIBES_OWNERSHIP]->(e)
-        SET r.type = obj.interest_type,
-            r.startDate = obj.startDate,
+        MERGE (os)-[r:DESCRIBES_OWNERSHIP {type: obj.interest_type}]->(e)
+        SET r.startDate = obj.startDate,
+            r.endDate = obj.endDate,
             r.share_exact = obj.share_exact,
             r.share_maximum = obj.share_maximum,
             r.share_minimum = obj.share_minimum,
-            r.endDate = obj.endDate,
             r.details = obj.details,
             r.share_exclusiveMaximum = obj.share_exclusiveMaximum,
             r.share_exclusiveMinimum = obj.share_exclusiveMinimum
     """, batch=batch)
+
 
 def create_ooc_has_control_relationships(tx, batch):
     """OOCStatement -[:DESCRIBES_CONTROL]-> Entity"""
