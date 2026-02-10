@@ -613,7 +613,7 @@ if __name__ == "__main__":
     monitor_p.terminate()
 
     # 6. Sluttrapport
-    print("\n🎉 Import ferdig (Alle workers avsluttet)!")
+    print("\n🎉 Fase 1 ferdig (Alle noder opprettet)!")
     print(f"Total tid: {datetime.now() - start_time_total}")
     print(f"Totalt antall objekter lest ifølge teller: {shared_counter.value}")
 
