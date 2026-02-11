@@ -14,7 +14,7 @@ AUTH = ("neo4j", "mRTzP1@h")
 FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
 BATCH_SIZE = 7000    # Antall noder per batch (juster basert på minne og ytelse)
-CPU_CORES = 12       # Bruker alle 12 kjernene
+CPU_CORES = 12      # Bruker alle 12 kjernene
 LOG_INTERVAL = 2.0  # Hvor ofte (sekunder) status skal printes til terminalen
 
 
@@ -128,11 +128,14 @@ def import_person_sources(tx, batch):
 def import_person_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (i:Identifier {uri: obj.mergeKey})
-        SET
-            i.id = COALESCE(obj.id, i.id),
-            i.schemeName = COALESCE(obj.schemeName, i.schemeName),
-            i.uri = COALESCE(obj.uri, i.uri)
+        // MERGE på id hvis den finnes, ellers fall tilbake til mergeKey
+        MERGE (i:Identifier {id: obj.id})
+        ON CREATE SET i.uri = obj.uri,
+                      i.schemeName = obj.schemeName,
+                      i.scheme = obj.scheme
+        ON MATCH SET i.uri = COALESCE(obj.uri, i.uri),
+                     i.schemeName = COALESCE(obj.schemeName, i.schemeName),
+                     i.scheme = COALESCE(obj.scheme, i.scheme)
     """, batch=batch)
 
 def import_entity_statements(tx, batch):
@@ -198,12 +201,14 @@ def import_entity_sources(tx, batch):
 def import_entity_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (i:Identifier {uri: obj.mergeKey})
-        SET
-            i.id = COALESCE(obj.id, i.id),
-            i.scheme = COALESCE(obj.scheme, i.scheme),
-            i.schemeName = COALESCE(obj.schemeName, i.schemeName),
-            i.uri = COALESCE(obj.uri, i.uri)
+        // MERGE på id hvis den finnes, ellers fall tilbake til mergeKey
+        MERGE (i:Identifier {id: obj.id})
+        ON CREATE SET i.uri = obj.uri,
+                      i.schemeName = obj.schemeName,
+                      i.scheme = obj.scheme
+        ON MATCH SET i.uri = COALESCE(obj.uri, i.uri),
+                     i.schemeName = COALESCE(obj.schemeName, i.schemeName),
+                     i.scheme = COALESCE(obj.scheme, i.scheme)
     """, batch=batch)
 
 def import_OOC_statements(tx, batch): 
@@ -248,8 +253,8 @@ def create_constraints(session):
     session.run("CREATE CONSTRAINT person_statement_id IF NOT EXISTS FOR (ps:PersonStatement) REQUIRE ps.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT entity_statement_id IF NOT EXISTS FOR (es:EntityStatement) REQUIRE es.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT address_address IF NOT EXISTS FOR (a:Address) REQUIRE a.address IS UNIQUE")
-    session.run("CREATE CONSTRAINT identifier_uri IF NOT EXISTS FOR (i:Identifier) REQUIRE i.uri IS UNIQUE")
-    
+    session.run("CREATE CONSTRAINT identifier_id IF NOT EXISTS FOR (i:Identifier) REQUIRE i.id IS UNIQUE")
+
     # VIKTIG: Constraint på Source URL for å håndtere unikhet
     session.run("CREATE CONSTRAINT source_url IF NOT EXISTS FOR (s:Source) REQUIRE s.url IS UNIQUE")
     print("✅ Constraints created for Person, Entity, OOCStatement, PersonStatement, EntityStatement, Identifier, and Source.")
