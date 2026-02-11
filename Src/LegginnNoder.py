@@ -254,7 +254,7 @@ def worker_process(chunk_info, shared_counter):
     
     # Lokale batch-lister
     batches = {
-        "personStatement": [], "person": [], "nationalities": [], "personaddress": [], "personsource": [], "personidentifier": [],
+        "personStatement": [], "person": [], "personaddress": [], "personsource": [], "personidentifier": [],
         "entityStatement": [], "entity": [], "entityaddress": [], "entitysource": [], "entityidentifier": [],
         "OOCStatement": [], "OOCsource": []
     }
@@ -319,13 +319,6 @@ def worker_process(chunk_info, shared_counter):
                         "birthDate": obj.get("birthDate"),
                         "personType": obj.get("personType")
                     })
-
-                    for nat in obj.get("nationalities", []):
-                        if nat.get("code"):  # Kun hvis code finnes
-                            batches["nationalities"].append({
-                                "code": nat.get("code"),
-                                "name": nat.get("name"),
-                            })
 
                     
                     for addr in obj.get("addresses", []):
@@ -426,10 +419,7 @@ def worker_process(chunk_info, shared_counter):
                         if len(batches["person"]) >= BATCH_SIZE:
                             run_with_retry(s, import_persons, batches["person"])
                             batches["person"].clear()
-                        if len(batches["nationalities"]) >= BATCH_SIZE:
-                            run_with_retry(s, import_nationalities, batches["nationalities"])
-                            batches["nationalities"].clear()
-
+                      
                         if len(batches["personaddress"]) >= BATCH_SIZE:
                             run_with_retry(s, import_person_addresses, batches["personaddress"])
                             batches["personaddress"].clear()
@@ -476,8 +466,6 @@ def worker_process(chunk_info, shared_counter):
                     run_with_retry(s, import_person_statements, batches["personStatement"])
                 if batches["person"]:
                     run_with_retry(s, import_persons, batches["person"])
-                if batches["nationalities"]: 
-                    run_with_retry(s, import_nationalities, batches["nationalities"])
                 if batches["personaddress"]:
                     run_with_retry(s, import_person_addresses, batches["personaddress"])
                 if batches["personsource"]:
