@@ -97,17 +97,9 @@ def import_nationalities(tx, batch):
 def import_person_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        WITH DISTINCT obj.address AS addr, obj.country AS ctry, obj.type AS t
-        WHERE addr IS NOT NULL
-
-        // Sortering for å unngå deadlocks i multiprosessering
-        ORDER BY addr
-
-        // Merge kun på address for å unngå duplikater selv om country/type mangler
-        MERGE (a:Address {address: addr})
-        SET 
-            a.country = COALESCE(ctry, a.country),
-            a.type = COALESCE(t, a.type)
+        MERGE (a:Address {address: obj.address})
+        SET a.country = COALESCE(obj.country, a.country),
+            a.type    = COALESCE(obj.type, a.type)
     """, batch=batch)
 
 def import_person_sources(tx, batch):
@@ -124,18 +116,15 @@ def import_person_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
-# --- Person identifier nodes ---
 def import_person_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        // MERGE på id hvis den finnes, ellers fall tilbake til mergeKey
-        MERGE (i:Identifier {id: obj.id})
-        ON CREATE SET i.uri = obj.uri,
-                      i.schemeName = obj.schemeName,
-                      i.scheme = obj.scheme
-        ON MATCH SET i.uri = COALESCE(obj.uri, i.uri),
-                     i.schemeName = COALESCE(obj.schemeName, i.schemeName),
-                     i.scheme = COALESCE(obj.scheme, i.scheme)
+        // MERGE på mergeKey som alltid finnes
+        MERGE (i:Identifier {mergeKey: obj.mergeKey})
+        SET i.id = obj.id,
+            i.uri = obj.uri,
+            i.schemeName = obj.schemeName,
+            i.scheme = obj.scheme
     """, batch=batch)
 
 def import_entity_statements(tx, batch):
@@ -171,17 +160,9 @@ def import_entitys(tx, batch):
 def import_entity_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        WITH DISTINCT obj.address AS addr, obj.country AS ctry, obj.type AS t
-        WHERE addr IS NOT NULL
-
-        // Sortering for å unngå deadlocks i multiprosessering
-        ORDER BY addr
-
-        // Merge kun på address
-        MERGE (a:Address {address: addr})
-        SET
-            a.country = COALESCE(ctry, a.country),
-            a.type = COALESCE(t, a.type)
+        MERGE (a:Address {address: obj.address})
+        SET a.country = COALESCE(obj.country, a.country),
+            a.type    = COALESCE(obj.type, a.type)
     """, batch=batch)
 
 def import_entity_sources(tx, batch):
@@ -197,18 +178,17 @@ def import_entity_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
+
 # --- Entity identifier nodes ---
 def import_entity_identifiers(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
-        // MERGE på id hvis den finnes, ellers fall tilbake til mergeKey
-        MERGE (i:Identifier {id: obj.id})
-        ON CREATE SET i.uri = obj.uri,
-                      i.schemeName = obj.schemeName,
-                      i.scheme = obj.scheme
-        ON MATCH SET i.uri = COALESCE(obj.uri, i.uri),
-                     i.schemeName = COALESCE(obj.schemeName, i.schemeName),
-                     i.scheme = COALESCE(obj.scheme, i.scheme)
+        // MERGE på mergeKey som alltid finnes
+        MERGE (i:Identifier {mergeKey: obj.mergeKey})
+        SET i.id = obj.id,
+            i.uri = obj.uri,
+            i.schemeName = obj.schemeName,
+            i.scheme = obj.scheme
     """, batch=batch)
 
 def import_OOC_statements(tx, batch): 
@@ -253,7 +233,7 @@ def create_constraints(session):
     session.run("CREATE CONSTRAINT person_statement_id IF NOT EXISTS FOR (ps:PersonStatement) REQUIRE ps.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT entity_statement_id IF NOT EXISTS FOR (es:EntityStatement) REQUIRE es.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT address_address IF NOT EXISTS FOR (a:Address) REQUIRE a.address IS UNIQUE")
-    session.run("CREATE CONSTRAINT identifier_id IF NOT EXISTS FOR (i:Identifier) REQUIRE i.id IS UNIQUE")
+    session.run("CREATE CONSTRAINT identifier_mergeKey IF NOT EXISTS FOR (i:Identifier) REQUIRE i.mergeKey IS UNIQUE")
 
     # VIKTIG: Constraint på Source URL for å håndtere unikhet
     session.run("CREATE CONSTRAINT source_url IF NOT EXISTS FOR (s:Source) REQUIRE s.url IS UNIQUE")
@@ -357,10 +337,10 @@ def worker_process(chunk_info, shared_counter):
                         batches["personsource"].append(source) # Pass source dict directly, url is key
 
 
-                    # --- Person identifier nodes ---
+                     # --- Person identifier nodes ---
                     for ident in obj.get("identifiers", []):
-                        # Lag mergeKey: uri hvis finnes, ellers schemeName:id
-                        merge_key = ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
+                        # Lag mergeKey: id hvis finnes, ellers uri, ellers schemeName:id
+                        merge_key = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         
                         # Legg til node-batch
                         batches["personidentifier"].append({
@@ -401,10 +381,10 @@ def worker_process(chunk_info, shared_counter):
                     if source and source.get("url"):
                         batches["entitysource"].append(source)
 
-                   # --- Entity identifier nodes ---
+                    # --- Entity identifier nodes ---
                     for ident in obj.get("identifiers", []):
-                        # Lag mergeKey: uri hvis finnes, ellers schemeName:id
-                        merge_key = ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
+                        # Lag mergeKey: id hvis finnes, ellers uri, ellers schemeName:id
+                        merge_key = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         
                         # Legg til node-batch
                         batches["entityidentifier"].append({

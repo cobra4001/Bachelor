@@ -1,10 +1,9 @@
 import orjson
-from collections import defaultdict
 
 FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
-# Finn statements med duplikater
 duplicates_info = []
+missing_id_info = []
 
 with open(FILE_PATH, "rb") as f:
     for line in f:
@@ -21,10 +20,18 @@ with open(FILE_PATH, "rb") as f:
                 seen = {}
                 for interest in interests:
                     interest_type = interest.get("type")
+                    # Sjekk om interest mangler type
+                    if not interest_type:
+                        missing_id_info.append({
+                            "statementID": statement_id,
+                            "subjectID": subject_id,
+                            "interest": interest
+                        })
+                        continue  # hopper over denne interest for duplikat-sjekk
+                    
                     key = (statement_id, subject_id, interest_type)
                     
                     if key in seen:
-                        # Dette er en duplikat!
                         duplicates_info.append({
                             "statementID": statement_id,
                             "type": interest_type,
@@ -34,22 +41,27 @@ with open(FILE_PATH, "rb") as f:
                     else:
                         seen[key] = interest
                 
-                if len(duplicates_info) >= 100:  # Sample de første 100
+                # Sample første 100 duplikater/manglende
+                if len(duplicates_info) >= 100 and len(missing_id_info) >= 100:
                     break
-        except:
+        except Exception as e:
+            print("Feil parsing linje:", e)
             continue
 
 # Print eksempler
 print(f"Fant {len(duplicates_info)} duplikat-eksempler:\n")
-
-for i, dup in enumerate(duplicates_info[:10]):  # Vis første 10
+for i, dup in enumerate(duplicates_info[:10]):
     print(f"\n--- Duplikat {i+1} ---")
     print(f"StatementID: {dup['statementID']}")
     print(f"Type: {dup['type']}")
-    print(f"\nInterest 1:")
-    for key, val in dup['interest1'].items():
-        print(f"  {key}: {val}")
-    print(f"\nInterest 2:")
-    for key, val in dup['interest2'].items():
-        print(f"  {key}: {val}")
+    print("Interest 1:", dup['interest1'])
+    print("Interest 2:", dup['interest2'])
+    print("-" * 50)
+
+print(f"\nFant {len(missing_id_info)} interests uten type eller id:\n")
+for i, miss in enumerate(missing_id_info[:10]):
+    print(f"\n--- Manglende {i+1} ---")
+    print(f"StatementID: {miss['statementID']}")
+    print(f"SubjectID: {miss['subjectID']}")
+    print("Interest:", miss['interest'])
     print("-" * 50)

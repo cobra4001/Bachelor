@@ -167,12 +167,12 @@ def create_source_has_person_statement(tx, batch):
     """, batch=batch)
 
 
-
+# --- Person statement -> identifier relasjoner ---
 def create_person_statement_has_identifier_relationships(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MATCH (ps:PersonStatement {statementID: obj.statementID})
-        MATCH (i:Identifier {id: obj.id})  // <-- endret fra uri til id
+        MATCH (i:Identifier {mergeKey: obj.mergeKey})
         MERGE (ps)-[:HAS_IDENTIFIER]->(i)
     """, batch=batch)
 
@@ -204,11 +204,12 @@ def create_source_has_entity_statement(tx, batch):
         MERGE (s)-[:HAS_STATEMENT]->(es)
     """, batch=batch)
 
+# --- Entity statement -> identifier relasjoner ---
 def create_entity_statement_has_identifier_relationships(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MATCH (es:EntityStatement {statementID: obj.statementID})
-        MATCH (i:Identifier {id: obj.id})  // <-- endret fra uri til id
+        MATCH (i:Identifier {mergeKey: obj.mergeKey})
         MERGE (es)-[:HAS_IDENTIFIER]->(i)
     """, batch=batch)
 
@@ -357,12 +358,13 @@ def worker_process(chunk_info, shared_counter):
 
                     # For personStatement -> Identifier
                     for ident in obj.get("identifiers", []):
-                        ident_id = ident.get("id")
-                        if ident_id:
-                            batches["person_statement_has_identifier"].append({
-                                "statementID": sid,
-                                "id": ident_id
-                            })
+                        # Lag samme mergeKey som i Fase 1
+                        merge_key = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
+                        
+                        batches["person_statement_has_identifier"].append({
+                            "statementID": sid,
+                            "mergeKey": merge_key  # <-- Bruk mergeKey
+                        })
 
                 elif stype == "entityStatement":
                     batches["describes_entity"].append({"statementID": sid, "EntityID": sid})
@@ -380,14 +382,16 @@ def worker_process(chunk_info, shared_counter):
                         })
                         
 
+                    
                     # For entityStatement -> Identifier
                     for ident in obj.get("identifiers", []):
-                        ident_id = ident.get("id")  # <-- dette blir nøkkelen i Neo4j
-                        if ident_id:
-                            batches["entity_statement_has_identifier"].append({
-                                "statementID": sid,
-                                "id": ident_id  # <-- bruk id her, ikke mergeKey
-                            })
+                        # Lag samme mergeKey som i Fase 1
+                        merge_key = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
+                        
+                        batches["entity_statement_has_identifier"].append({
+                            "statementID": sid,
+                            "mergeKey": merge_key  # <-- Bruk mergeKey
+                        })
 
                 elif stype == "ownershipOrControlStatement":
                     interested_party = obj.get("interestedParty", {})
