@@ -139,9 +139,9 @@ def create_person_has_address_relationships(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MATCH (p:Person {ident: obj.personID})
-        MATCH (a:Address {address: obj.address, country: obj.country, type: obj.type})
+        MATCH (a:Address {address: obj.address})  // <-- kun address
         MERGE (p)-[:HAS_ADDRESS]->(a)
-""", batch=batch)
+    """, batch=batch)
 
 
 
@@ -191,10 +191,9 @@ def create_entity_has_address_relationships(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         MATCH (e:Entity {ident: obj.EntityID})
-        MATCH (a:Address {address: obj.address, country: obj.country, type: obj.type})
+        MATCH (a:Address {address: obj.address})  // <-- kun address
         MERGE (e)-[:HAS_ADDRESS]->(a)
     """, batch=batch)
-
 
 def create_source_has_entity_statement(tx, batch):
     """Source -[:HAS_STATEMENT]-> EntityStatement"""
@@ -249,24 +248,27 @@ def create_entity_is_interested_party_relationships(tx, batch):
 
 
 def create_ooc_interest_in_entity_relationships(tx, batch):
-    """
-    OOCStatement -[:DESCRIBES_OWNERSHIP {type, share, startDate, endDate, ...}]-> Entity
-    Lager én relasjon per interest, slik at både 'shareholding' og 'voting-rights' beholdes.
+    """ 
+    OOCStatement -[:DESCRIBES_OWNERSHIP {type, share, startDate, endDate, details, ...}]-> Entity
+    Bruker CREATE for å beholde alle interests, inkludert ulike juridiske strukturer.
     """
     tx.run("""
-        UNWIND $batch AS obj
-        WITH obj WHERE obj.subject_id IS NOT NULL
-        MATCH (os:OOCStatement {statementID: obj.statementID})
-        MATCH (e:Entity {ident: obj.subject_id})
-        MERGE (os)-[r:DESCRIBES_OWNERSHIP {type: obj.interest_type}]->(e)
-        SET r.startDate = obj.startDate,
-            r.endDate = obj.endDate,
-            r.share_exact = obj.share_exact,
-            r.share_maximum = obj.share_maximum,
-            r.share_minimum = obj.share_minimum,
-            r.details = obj.details,
-            r.share_exclusiveMaximum = obj.share_exclusiveMaximum,
-            r.share_exclusiveMinimum = obj.share_exclusiveMinimum
+    UNWIND $batch AS obj
+    WITH obj WHERE obj.subject_id IS NOT NULL
+    
+    MATCH (os:OOCStatement {statementID: obj.statementID})
+    MATCH (e:Entity {ident: obj.subject_id})
+    
+    CREATE (os)-[r:DESCRIBES_OWNERSHIP]->(e)
+    SET r.type = obj.interest_type,
+        r.startDate = obj.startDate,
+        r.endDate = obj.endDate,
+        r.share_exact = obj.share_exact,
+        r.share_maximum = obj.share_maximum,
+        r.share_minimum = obj.share_minimum,
+        r.details = obj.details,
+        r.share_exclusiveMaximum = obj.share_exclusiveMaximum,
+        r.share_exclusiveMinimum = obj.share_exclusiveMinimum
     """, batch=batch)
 
 
@@ -339,8 +341,6 @@ def worker_process(chunk_info, shared_counter):
                             batches["person_has_address"].append({
                                 "personID": sid,
                                 "address": addr.get("address"),
-                                "country": addr.get("country"),
-                                "type": addr.get("type")
                             })
                     for nat in obj.get("nationalities", []):
                         if nat.get("code"):
@@ -373,8 +373,6 @@ def worker_process(chunk_info, shared_counter):
                             batches["entity_has_address"].append({
                                 "EntityID": sid,
                                 "address": addr.get("address"),
-                                "country": addr.get("country"),
-                                "type": addr.get("type")
                             })
                     source = obj.get("source")
                     if source and source.get("url"):
@@ -427,7 +425,7 @@ def worker_process(chunk_info, shared_counter):
                                 "share_maximum": parse_share(share_data.get("maximum")),
                                 "share_minimum": parse_share(share_data.get("minimum")),
                                 "endDate": interest.get("endDate"),
-                                "details": interest.get("interestLevel"),
+                                "details": interest.get("details"),
                                 "share_exclusiveMaximum": share_data.get("exclusiveMaximum"),
                                 "share_exclusiveMinimum": share_data.get("exclusiveMinimum")
                             })

@@ -1,38 +1,55 @@
 import orjson
-import time
+from collections import defaultdict
 
-count_with_source = 0
-count_without_source = 0
-total_entity_statements = 0
-start_time = time.time()
+FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
-print("Scanning fil...")
+# Finn statements med duplikater
+duplicates_info = []
 
-with open(r"F:\1mil\1000000.json", "rb") as f:
-    for i, line in enumerate(f):
+with open(FILE_PATH, "rb") as f:
+    for line in f:
         try:
             obj = orjson.loads(line)
             
-            if obj.get("statementType") == "entityStatement":
-                total_entity_statements += 1
+            if obj.get("statementType") == "ownershipOrControlStatement":
+                subject_id = obj.get("subject", {}).get("describedByEntityStatement")
+                statement_id = obj.get("statementID")
                 
-                if obj.get("source") and obj.get("source").get("url"):
-                    count_with_source += 1
-                else:
-                    count_without_source += 1
-            
-            # Progress update hver 100k linje
-            if (i + 1) % 100000 == 0:
-                elapsed = time.time() - start_time
-                print(f"Processed {i+1:,} lines in {elapsed:.1f}s | EntityStatements: {total_entity_statements:,} | Med source: {count_with_source:,}")
-        
+                interests = obj.get("interests", [])
+                
+                # Finn duplikater innenfor samme statement
+                seen = {}
+                for interest in interests:
+                    interest_type = interest.get("type")
+                    key = (statement_id, subject_id, interest_type)
+                    
+                    if key in seen:
+                        # Dette er en duplikat!
+                        duplicates_info.append({
+                            "statementID": statement_id,
+                            "type": interest_type,
+                            "interest1": seen[key],
+                            "interest2": interest
+                        })
+                    else:
+                        seen[key] = interest
+                
+                if len(duplicates_info) >= 100:  # Sample de første 100
+                    break
         except:
             continue
 
-elapsed = time.time() - start_time
-print(f"\n=== RESULTAT ===")
-print(f"Total linjer scannet: {i+1:,}")
-print(f"Total EntityStatements: {total_entity_statements:,}")
-print(f"EntityStatements MED source: {count_with_source:,} ({count_with_source/total_entity_statements*100:.1f}%)")
-print(f"EntityStatements UTEN source: {count_without_source:,} ({count_without_source/total_entity_statements*100:.1f}%)")
-print(f"Total tid: {elapsed:.1f}s")
+# Print eksempler
+print(f"Fant {len(duplicates_info)} duplikat-eksempler:\n")
+
+for i, dup in enumerate(duplicates_info[:10]):  # Vis første 10
+    print(f"\n--- Duplikat {i+1} ---")
+    print(f"StatementID: {dup['statementID']}")
+    print(f"Type: {dup['type']}")
+    print(f"\nInterest 1:")
+    for key, val in dup['interest1'].items():
+        print(f"  {key}: {val}")
+    print(f"\nInterest 2:")
+    for key, val in dup['interest2'].items():
+        print(f"  {key}: {val}")
+    print("-" * 50)

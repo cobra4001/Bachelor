@@ -98,10 +98,16 @@ def import_person_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH DISTINCT obj.address AS addr, obj.country AS ctry, obj.type AS t
-        WHERE addr IS NOT NULL AND ctry IS NOT NULL AND t IS NOT NULL
-        // Sortering gjør at alle tråder låser i samme rekkefølge -> Mindre deadlocks
+        WHERE addr IS NOT NULL
+
+        // Sortering for å unngå deadlocks i multiprosessering
         ORDER BY addr
-        MERGE (a:Address {address: addr, country: ctry, type: t})
+
+        // Merge kun på address for å unngå duplikater selv om country/type mangler
+        MERGE (a:Address {address: addr})
+        SET 
+            a.country = COALESCE(ctry, a.country),
+            a.type = COALESCE(t, a.type)
     """, batch=batch)
 
 def import_person_sources(tx, batch):
@@ -163,15 +169,17 @@ def import_entity_addresses(tx, batch):
     tx.run("""
         UNWIND $batch AS obj
         WITH DISTINCT obj.address AS addr, obj.country AS ctry, obj.type AS t
-        WHERE addr IS NOT NULL AND ctry IS NOT NULL AND t IS NOT NULL
+        WHERE addr IS NOT NULL
 
-        // Sortering for å unngå deadlock-sykluser
-        WITH addr, ctry, t
-        ORDER BY addr, ctry, t
+        // Sortering for å unngå deadlocks i multiprosessering
+        ORDER BY addr
 
-        MERGE (a:Address {address: addr, country: ctry, type: t})
+        // Merge kun på address
+        MERGE (a:Address {address: addr})
+        SET
+            a.country = COALESCE(ctry, a.country),
+            a.type = COALESCE(t, a.type)
     """, batch=batch)
-
 
 def import_entity_sources(tx, batch):
     tx.run("""
@@ -239,7 +247,7 @@ def create_constraints(session):
     session.run("CREATE CONSTRAINT ooc_statement_ident IF NOT EXISTS FOR (os:OOCStatement) REQUIRE os.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT person_statement_id IF NOT EXISTS FOR (ps:PersonStatement) REQUIRE ps.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT entity_statement_id IF NOT EXISTS FOR (es:EntityStatement) REQUIRE es.statementID IS UNIQUE")
-    session.run("CREATE CONSTRAINT address_unique IF NOT EXISTS FOR (a:Address) REQUIRE (a.address, a.country, a.type) IS UNIQUE")
+    session.run("CREATE CONSTRAINT address_address IF NOT EXISTS FOR (a:Address) REQUIRE a.address IS UNIQUE")
     session.run("CREATE CONSTRAINT identifier_uri IF NOT EXISTS FOR (i:Identifier) REQUIRE i.uri IS UNIQUE")
     
     # VIKTIG: Constraint på Source URL for å håndtere unikhet
