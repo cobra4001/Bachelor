@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel
-from typing import List
+from typing import Optional
 
 # -------------------------
 # CONFIG
@@ -49,15 +49,26 @@ class KnownPersonResponse(BaseModel):
 
 class PersonDetailResponse(BaseModel):
     ident: str
-    fullName: str
-    birthDate: str
-    familyName: str
-    givenName: str
-    personType: str
+    fullName: Optional[str] = None
+    birthDate: Optional[str] = None
+    familyName: Optional[str] = None
+    givenName: Optional[str] = None
+    personType: Optional[str] = None
 
 class RegisteredEntityResponse(BaseModel):
     ident: str
     is_registered_entity: bool    
+
+class EntityDetailResponse(BaseModel):
+    ident: str
+    name: Optional[str] = None
+    alternateNames: Optional[str] = None
+    entityType: Optional[str] = None
+    foundingDate: Optional[str] = None
+    incorporatedInJurisdiction_name: Optional[str] = None
+    incorporatedInJurisdiction_code: Optional[str] = None
+    dissolutionDate: Optional[str] = None
+
 # -------------------------
 # DB SESSION
 # -------------------------
@@ -76,15 +87,12 @@ async def check_known_person(session, ident: str):
     """
     result = await session.run(query, ident=ident)
     record = await result.single()
-
     if not record:
         return None
-
     return {
         "ident": record["ident"],
         "is_known_person": record["is_known_person"]
     }
-
 
 async def get_person_details(session, ident: str):
     query = """
@@ -110,21 +118,31 @@ async def check_registered_entity(session, ident: str):
     """
     result = await session.run(query, ident=ident)
     record = await result.single()
-
     if not record:
         return None
+    return dict(record)
 
-    return {
-        "ident": record["ident"],
-        "is_registered_entity": record["is_registered_entity"]
-    }
-
+async def get_entity_details(session, ident: str):
+    query = """
+    MATCH (e:Entity {ident: $ident})
+    RETURN e.ident AS ident,
+           e.name AS name,
+           e.alternateNames AS alternateNames,
+           e.entityType AS entityType,
+           e.foundingDate AS foundingDate,
+           e.incorporatedInJurisdiction_name AS incorporatedInJurisdiction_name,
+           e.incorporatedInJurisdiction_code AS incorporatedInJurisdiction_code,
+           e.dissolutionDate AS dissolutionDate
+    """
+    result = await session.run(query, ident=ident)
+    record = await result.single()
+    if not record:
+        return None
+    return dict(record)
 
 # -------------------------
 # ROUTES / ENDPOINTS
 # -------------------------
-
-# 🔍 Check if statement is known
 @app.get("/Person/{ident}/known", response_model=KnownPersonResponse)
 async def is_known_person(ident: str, session=Depends(get_session)):
     data = await check_known_person(session, ident)
@@ -132,8 +150,6 @@ async def is_known_person(ident: str, session=Depends(get_session)):
         raise HTTPException(status_code=404, detail="Person not found")
     return data
 
-
-# 👤 Get person details using ident
 @app.get("/Person/{ident}/details", response_model=PersonDetailResponse)
 async def person_details_endpoint(ident: str, session=Depends(get_session)):
     data = await get_person_details(session, ident)
@@ -141,7 +157,6 @@ async def person_details_endpoint(ident: str, session=Depends(get_session)):
         raise HTTPException(status_code=404, detail="Person not found")
     return data
 
-# check if Entity is registered
 @app.get("/Entity/{ident}/registered", response_model=RegisteredEntityResponse)
 async def is_registered_entity(ident: str, session=Depends(get_session)):
     data = await check_registered_entity(session, ident)
@@ -149,10 +164,15 @@ async def is_registered_entity(ident: str, session=Depends(get_session)):
         raise HTTPException(status_code=404, detail="Entity not found")
     return data
 
-
+@app.get("/Entity/{ident}/details", response_model=EntityDetailResponse)
+async def entity_details_endpoint(ident: str, session=Depends(get_session)):
+    data = await get_entity_details(session, ident)
+    if not data:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return data
 
 # ❤️ Health check
-@app.get("/Health")
+@app.get("/health")
 async def health_check():
     try:
         await driver.verify_connectivity()
