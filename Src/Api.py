@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException
 from neo4j import AsyncGraphDatabase
 from pydantic import BaseModel
+from typing import List
 
 # -------------------------
 # CONFIG
@@ -37,15 +38,26 @@ async def lifespan(app: FastAPI):
     print("🛑 Lukker Neo4j-tilkobling...")
     await driver.close()
 
-
 app = FastAPI(lifespan=lifespan)
 
 # -------------------------
-# RESPONSE MODEL
+# RESPONSE MODELS
 # -------------------------
 class KnownPersonResponse(BaseModel):
     statement_id: str
     is_known_person: bool
+
+class PersonStatementResponse(BaseModel):
+    statement_id: str
+    fullName: str
+
+class PersonDetailResponse(BaseModel):
+    ident: str
+    fullName: str
+    birthDate: str
+    familyName: str
+    givenName: str
+    personType: str
 
 # -------------------------
 # DB SESSION
@@ -55,7 +67,7 @@ async def get_session():
         yield session
 
 # -------------------------
-# CYPHER
+# CYPHER / DB FUNCTIONS
 # -------------------------
 async def check_known_person(session, statement_id: str):
     query = """
@@ -67,7 +79,6 @@ async def check_known_person(session, statement_id: str):
         })
     } AS is_known_person
     """
-
     result = await session.run(query, statement_id=statement_id)
     record = await result.single()
 
@@ -79,22 +90,62 @@ async def check_known_person(session, statement_id: str):
         "is_known_person": record["is_known_person"]
     }
 
+async def get_statements_for_person(session, ident: str):
+    query = """
+    MATCH (ps:PersonStatement)-[:DESCRIBES_PERSON]->(p:Person {ident: $ident})
+    RETURN ps.statementID AS statement_id, p.fullName AS fullName
+    """
+    result = await session.run(query, ident=ident)
+    records = await result.values()
+    return [{"statement_id": r[0], "fullName": r[1]} for r in records]
+
+async def get_person_details(session, ident: str):
+    query = """
+    MATCH (p:Person {ident: $ident})
+    RETURN p.ident AS ident,
+           p.fullName AS fullName,
+           p.birthDate AS birthDate,
+           p.familyName AS familyName,
+           p.givenName AS givenName,
+           p.personType AS personType
+    """
+    result = await session.run(query, ident=ident)
+    record = await result.single()
+    if not record:
+        return None
+    return dict(record)
+
+
 # -------------------------
-# ROUTES
+# ROUTES / ENDPOINTS
 # -------------------------
 
-# 🔍 Main endpoint
+# 🔍 Check if statement is known
 @app.get("/person-statement/{statement_id}/known", response_model=KnownPersonResponse)
 async def is_known_person(statement_id: str, session=Depends(get_session)):
     data = await check_known_person(session, statement_id)
-
     if not data:
         raise HTTPException(status_code=404, detail="PersonStatement not found")
+    return data
 
+# 🧾 Get all statements for a person using ident
+@app.get("/person/{ident}/statements", response_model=List[PersonStatementResponse])
+async def statements_for_person_endpoint(ident: str, session=Depends(get_session)):
+    data = await get_statements_for_person(session, ident)
+    if not data:
+        raise HTTPException(status_code=404, detail="No statements found for this person")
+    return data
+
+# 👤 Get person details using ident
+@app.get("/person/{ident}/details", response_model=PersonDetailResponse)
+async def person_details_endpoint(ident: str, session=Depends(get_session)):
+    data = await get_person_details(session, ident)
+    if not data:
+        raise HTTPException(status_code=404, detail="Person not found")
     return data
 
 
-# ❤️ Health check (viktig!)
+# ❤️ Health check
 @app.get("/health")
 async def health_check():
     try:
