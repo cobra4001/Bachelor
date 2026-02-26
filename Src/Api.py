@@ -44,12 +44,8 @@ app = FastAPI(lifespan=lifespan)
 # RESPONSE MODELS
 # -------------------------
 class KnownPersonResponse(BaseModel):
-    statement_id: str
+    ident: str
     is_known_person: bool
-
-class PersonStatementResponse(BaseModel):
-    statement_id: str
-    fullName: str
 
 class PersonDetailResponse(BaseModel):
     ident: str
@@ -59,6 +55,9 @@ class PersonDetailResponse(BaseModel):
     givenName: str
     personType: str
 
+class RegisteredEntityResponse(BaseModel):
+    ident: str
+    is_registered_entity: bool    
 # -------------------------
 # DB SESSION
 # -------------------------
@@ -69,35 +68,23 @@ async def get_session():
 # -------------------------
 # CYPHER / DB FUNCTIONS
 # -------------------------
-async def check_known_person(session, statement_id: str):
+async def check_known_person(session, ident: str):
     query = """
-    MATCH (ps:PersonStatement {statementID: $statement_id})
-    RETURN ps.statementID AS statement_id,
-    EXISTS {
-        MATCH (o:OOCStatement {
-            interestedParty_describedByPersonStatement: ps.statementID
-        })
-    } AS is_known_person
+    MATCH (p:Person {ident: $ident})
+    RETURN p.ident AS ident,
+           p IS NOT NULL AS is_known_person
     """
-    result = await session.run(query, statement_id=statement_id)
+    result = await session.run(query, ident=ident)
     record = await result.single()
 
     if not record:
         return None
 
     return {
-        "statement_id": record["statement_id"],
+        "ident": record["ident"],
         "is_known_person": record["is_known_person"]
     }
 
-async def get_statements_for_person(session, ident: str):
-    query = """
-    MATCH (ps:PersonStatement)-[:DESCRIBES_PERSON]->(p:Person {ident: $ident})
-    RETURN ps.statementID AS statement_id, p.fullName AS fullName
-    """
-    result = await session.run(query, ident=ident)
-    records = await result.values()
-    return [{"statement_id": r[0], "fullName": r[1]} for r in records]
 
 async def get_person_details(session, ident: str):
     query = """
@@ -115,38 +102,57 @@ async def get_person_details(session, ident: str):
         return None
     return dict(record)
 
+async def check_registered_entity(session, ident: str):
+    query = """
+    MATCH (e:Entity {ident: $ident})
+    RETURN e.ident AS ident,
+           e IS NOT NULL AS is_registered_entity
+    """
+    result = await session.run(query, ident=ident)
+    record = await result.single()
+
+    if not record:
+        return None
+
+    return {
+        "ident": record["ident"],
+        "is_registered_entity": record["is_registered_entity"]
+    }
+
 
 # -------------------------
 # ROUTES / ENDPOINTS
 # -------------------------
 
 # 🔍 Check if statement is known
-@app.get("/person-statement/{statement_id}/known", response_model=KnownPersonResponse)
-async def is_known_person(statement_id: str, session=Depends(get_session)):
-    data = await check_known_person(session, statement_id)
+@app.get("/Person/{ident}/known", response_model=KnownPersonResponse)
+async def is_known_person(ident: str, session=Depends(get_session)):
+    data = await check_known_person(session, ident)
     if not data:
-        raise HTTPException(status_code=404, detail="PersonStatement not found")
+        raise HTTPException(status_code=404, detail="Person not found")
     return data
 
-# 🧾 Get all statements for a person using ident
-@app.get("/person/{ident}/statements", response_model=List[PersonStatementResponse])
-async def statements_for_person_endpoint(ident: str, session=Depends(get_session)):
-    data = await get_statements_for_person(session, ident)
-    if not data:
-        raise HTTPException(status_code=404, detail="No statements found for this person")
-    return data
 
 # 👤 Get person details using ident
-@app.get("/person/{ident}/details", response_model=PersonDetailResponse)
+@app.get("/Person/{ident}/details", response_model=PersonDetailResponse)
 async def person_details_endpoint(ident: str, session=Depends(get_session)):
     data = await get_person_details(session, ident)
     if not data:
         raise HTTPException(status_code=404, detail="Person not found")
     return data
 
+# check if Entity is registered
+@app.get("/Entity/{ident}/registered", response_model=RegisteredEntityResponse)
+async def is_registered_entity(ident: str, session=Depends(get_session)):
+    data = await check_registered_entity(session, ident)
+    if not data:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return data
+
+
 
 # ❤️ Health check
-@app.get("/health")
+@app.get("/Health")
 async def health_check():
     try:
         await driver.verify_connectivity()
