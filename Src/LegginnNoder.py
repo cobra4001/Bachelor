@@ -56,7 +56,6 @@ def parse_share(value):
 # ========================
 
 def import_person_statements(tx, batch):
-    # ENDRING: personType fjernet fra PersonStatement-noder
     tx.run("""
         UNWIND $batch AS obj
         MERGE (ps:PersonStatement {statementID: obj.statementID})
@@ -72,7 +71,6 @@ def import_person_statements(tx, batch):
     """, batch=batch)
 
 def import_persons(tx, batch):
-    # ENDRING: ident -> personID
     tx.run("""
         UNWIND $batch AS obj
         MERGE (p:Person {personID: obj.personID})
@@ -117,7 +115,6 @@ def import_person_sources(tx, batch):
     """, batch=batch)
 
 def import_person_identifiers(tx, batch):
-    # ENDRING: mergeKey fjernet, MERGE direkte på id
     tx.run("""
         UNWIND $batch AS obj
         MERGE (i:Identifier {id: obj.id})
@@ -143,7 +140,6 @@ def import_entity_statements(tx, batch):
     """, batch=batch)
 
 def import_entitys(tx, batch):
-    # ENDRING: ident -> entityID
     tx.run("""
         UNWIND $batch AS obj
         MERGE (f:Entity {entityID: obj.entityID})
@@ -179,7 +175,6 @@ def import_entity_sources(tx, batch):
     """, batch=batch)
 
 def import_entity_identifiers(tx, batch):
-    # ENDRING: mergeKey fjernet, MERGE direkte på id
     tx.run("""
         UNWIND $batch AS obj
         MERGE (i:Identifier {id: obj.id})
@@ -223,14 +218,13 @@ def import_OOC_sources(tx, batch):
 # CONSTRAINTS (Kjøres i main)
 # ========================
 def create_constraints(session):
-    # ENDRING: person_ident -> person_personID, entity_ident -> entity_entityID
     session.run("CREATE CONSTRAINT person_personID IF NOT EXISTS FOR (p:Person) REQUIRE p.personID IS UNIQUE")
     session.run("CREATE CONSTRAINT entity_entityID IF NOT EXISTS FOR (e:Entity) REQUIRE e.entityID IS UNIQUE")
     session.run("CREATE CONSTRAINT ooc_statement_ident IF NOT EXISTS FOR (os:OOCStatement) REQUIRE os.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT person_statement_id IF NOT EXISTS FOR (ps:PersonStatement) REQUIRE ps.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT entity_statement_id IF NOT EXISTS FOR (es:EntityStatement) REQUIRE es.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT address_address IF NOT EXISTS FOR (a:Address) REQUIRE a.address IS UNIQUE")
-    # ENDRING: identifier constraint på id i stedet for mergeKey
+ 
     session.run("CREATE CONSTRAINT identifier_id IF NOT EXISTS FOR (i:Identifier) REQUIRE i.id IS UNIQUE")
     session.run("CREATE CONSTRAINT source_url IF NOT EXISTS FOR (s:Source) REQUIRE s.url IS UNIQUE")
     print("✅ Constraints created for Person, Entity, OOCStatement, PersonStatement, EntityStatement, Identifier, and Source.")
@@ -283,7 +277,7 @@ def worker_process(chunk_info, shared_counter):
                 # ========================
 
                 if stype == "personStatement":
-                    # ENDRING: personType fjernet fra PersonStatement-batch
+    
                     batches["personStatement"].append({
                         "statementID": sid,
                         "statementType": obj.get("statementType"),
@@ -318,7 +312,7 @@ def worker_process(chunk_info, shared_counter):
                     if source and source.get("url"):
                         batches["personsource"].append(source)
 
-                    # ENDRING: mergeKey fjernet, kun id brukes
+                    
                     for ident in obj.get("identifiers", []):
                         ident_id = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         batches["personidentifier"].append({
@@ -361,7 +355,7 @@ def worker_process(chunk_info, shared_counter):
                     if source and source.get("url"):
                         batches["entitysource"].append(source)
 
-                    # ENDRING: mergeKey fjernet, kun id brukes
+                   
                     for ident in obj.get("identifiers", []):
                         ident_id = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         batches["entityidentifier"].append({
