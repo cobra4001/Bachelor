@@ -13,10 +13,9 @@ URI = "bolt://10.196.241.255:7687"
 AUTH = ("neo4j", "mRTzP1@h")
 FILE_PATH = r"F:\OpenOwnership full fil\register.json"
 
-BATCH_SIZE = 7000    # Antall relasjoner per batch (juster basert på minne og ytelse)
-CPU_CORES = 6    # Bruker 6 av 12 kjernene for relasjoner, siden dette er mer IO-bound enn node-importen
-LOG_INTERVAL = 2.0 # Hvor ofte (sekunder) status skal printes til terminalen          
-
+BATCH_SIZE = 7000
+CPU_CORES = 6
+LOG_INTERVAL = 2.0
 
 
 # ========================
@@ -81,16 +80,12 @@ def flush_batches(driver, batches, shared_counter=None, local_processed_count=0)
             run_with_retry(s, create_ooc_has_control_relationships, batches["ooc_has_control"])
             batches["ooc_has_control"].clear()
 
-    # Oppdater delt teller hvis oppgitt
     if shared_counter is not None and local_processed_count > 0:
         with shared_counter.get_lock():
             shared_counter.value += local_processed_count
 
 
 def run_with_retry(session, func, batch, max_retries=5):
-    """
-    Kjør en skrivetransaksjon med enkel retry ved TransientError (inkl. deadlocks).
-    """
     attempt = 0
     while True:
         try:
@@ -106,7 +101,6 @@ def run_with_retry(session, func, batch, max_retries=5):
 
 
 def parse_share(value):
-    """Parse share values from string or number to float"""
     if isinstance(value, str):
         value = value.strip().replace("%", "")
         try:
@@ -125,36 +119,35 @@ def parse_share(value):
 
 def create_describes_person_relationships(tx, batch):
     """PersonStatement -[:DESCRIBES_PERSON]-> Person"""
+    # ENDRING: p.ident -> p.personID
     tx.run("""
         UNWIND $batch AS obj
         MATCH (ps:PersonStatement {statementID: obj.statementID})
-        MATCH (p:Person {ident: obj.personID})
+        MATCH (p:Person {personID: obj.personID})
         MERGE (ps)-[:DESCRIBES_PERSON]->(p)
     """, batch=batch)
 
 
-
 def create_person_has_address_relationships(tx, batch):
     """Person -[:HAS_ADDRESS]-> Address"""
+    # ENDRING: p.ident -> p.personID
     tx.run("""
         UNWIND $batch AS obj
-        MATCH (p:Person {ident: obj.personID})
-        MATCH (a:Address {address: obj.address})  // <-- kun address
+        MATCH (p:Person {personID: obj.personID})
+        MATCH (a:Address {address: obj.address})
         MERGE (p)-[:HAS_ADDRESS]->(a)
     """, batch=batch)
 
 
-
 def create_person_has_nationality_relationships(tx, batch):
+    # ENDRING: p.ident -> p.personID
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.personID IS NOT NULL AND obj.code IS NOT NULL
-        MATCH (p:Person {ident: obj.personID})
+        MATCH (p:Person {personID: obj.personID})
         MATCH (n:Nationality {code: obj.code})
         MERGE (p)-[:HAS_NATIONALITY]->(n)
     """, batch=batch)
-
-
 
 
 def create_source_has_person_statement(tx, batch):
@@ -167,33 +160,37 @@ def create_source_has_person_statement(tx, batch):
     """, batch=batch)
 
 
-# --- Person statement -> identifier relasjoner ---
 def create_person_statement_has_identifier_relationships(tx, batch):
+    # ENDRING: mergeKey -> id
     tx.run("""
         UNWIND $batch AS obj
         MATCH (ps:PersonStatement {statementID: obj.statementID})
-        MATCH (i:Identifier {mergeKey: obj.mergeKey})
+        MATCH (i:Identifier {id: obj.identifierID})
         MERGE (ps)-[:HAS_IDENTIFIER]->(i)
     """, batch=batch)
 
+
 def create_describes_entity_relationships(tx, batch):
     """EntityStatement -[:DESCRIBES_ENTITY]-> Entity"""
+    # ENDRING: e.ident -> e.entityID
     tx.run("""
         UNWIND $batch AS obj
         MATCH (es:EntityStatement {statementID: obj.statementID})
-        MATCH (e:Entity {ident: obj.EntityID})
+        MATCH (e:Entity {entityID: obj.entityID})
         MERGE (es)-[:DESCRIBES_ENTITY]->(e)
     """, batch=batch)
 
 
 def create_entity_has_address_relationships(tx, batch):
     """Entity -[:HAS_ADDRESS]-> Address"""
+    # ENDRING: e.ident -> e.entityID
     tx.run("""
         UNWIND $batch AS obj
-        MATCH (e:Entity {ident: obj.EntityID})
-        MATCH (a:Address {address: obj.address})  // <-- kun address
+        MATCH (e:Entity {entityID: obj.entityID})
+        MATCH (a:Address {address: obj.address})
         MERGE (e)-[:HAS_ADDRESS]->(a)
     """, batch=batch)
+
 
 def create_source_has_entity_statement(tx, batch):
     """Source -[:HAS_STATEMENT]-> EntityStatement"""
@@ -204,14 +201,16 @@ def create_source_has_entity_statement(tx, batch):
         MERGE (s)-[:HAS_STATEMENT]->(es)
     """, batch=batch)
 
-# --- Entity statement -> identifier relasjoner ---
+
 def create_entity_statement_has_identifier_relationships(tx, batch):
+    # ENDRING: mergeKey -> id
     tx.run("""
         UNWIND $batch AS obj
         MATCH (es:EntityStatement {statementID: obj.statementID})
-        MATCH (i:Identifier {mergeKey: obj.mergeKey})
+        MATCH (i:Identifier {id: obj.identifierID})
         MERGE (es)-[:HAS_IDENTIFIER]->(i)
     """, batch=batch)
+
 
 def create_source_has_ooc_statement(tx, batch):
     """Source -[:HAS_STATEMENT]-> OOCStatement"""
@@ -225,11 +224,11 @@ def create_source_has_ooc_statement(tx, batch):
 
 def create_person_is_interested_party_relationships(tx, batch):
     """Person -[:IS_INTERESTED_PARTY]-> OOCStatement"""
+    # ENDRING: p.ident -> p.personID
     tx.run("""
         UNWIND $batch AS obj
-        // Bare hvis person finnes
         WITH obj WHERE obj.interestedParty_describedByPersonStatement IS NOT NULL
-        MATCH (p:Person {ident: obj.interestedParty_describedByPersonStatement})
+        MATCH (p:Person {personID: obj.interestedParty_describedByPersonStatement})
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MERGE (p)-[:IS_INTERESTED_PARTY]->(os)
     """, batch=batch)
@@ -237,28 +236,25 @@ def create_person_is_interested_party_relationships(tx, batch):
 
 def create_entity_is_interested_party_relationships(tx, batch):
     """Entity -[:IS_INTERESTED_PARTY]-> OOCStatement"""
+    # ENDRING: e.ident -> e.entityID
     tx.run("""
         UNWIND $batch AS obj
-        // Bare hvis entity finnes
         WITH obj WHERE obj.interestedParty_describedByEntityStatement IS NOT NULL
-        MATCH (e:Entity {ident: obj.interestedParty_describedByEntityStatement})
+        MATCH (e:Entity {entityID: obj.interestedParty_describedByEntityStatement})
         MATCH (os:OOCStatement {statementID: obj.statementID})
         MERGE (e)-[:IS_INTERESTED_PARTY]->(os)
     """, batch=batch)
 
 
-
 def create_ooc_interest_in_entity_relationships(tx, batch):
-    """ 
-    OOCStatement -[:DESCRIBES_OWNERSHIP {type, share, startDate, endDate, details, ...}]-> Entity
-    Bruker CREATE for å beholde alle interests, inkludert ulike juridiske strukturer.
-    """
+    """OOCStatement -[:DESCRIBES_OWNERSHIP]-> Entity"""
+    # ENDRING: e.ident -> e.entityID
     tx.run("""
     UNWIND $batch AS obj
     WITH obj WHERE obj.subject_id IS NOT NULL
     
     MATCH (os:OOCStatement {statementID: obj.statementID})
-    MATCH (e:Entity {ident: obj.subject_id})
+    MATCH (e:Entity {entityID: obj.subject_id})
     
     CREATE (os)-[r:DESCRIBES_OWNERSHIP]->(e)
     SET r.type = obj.interest_type,
@@ -275,13 +271,15 @@ def create_ooc_interest_in_entity_relationships(tx, batch):
 
 def create_ooc_has_control_relationships(tx, batch):
     """OOCStatement -[:DESCRIBES_CONTROL]-> Entity"""
+    # ENDRING: e.ident -> e.entityID
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.entity_id IS NOT NULL
         MATCH (os:OOCStatement {statementID: obj.statementID})
-        MATCH (e:Entity {ident: obj.entity_id})
+        MATCH (e:Entity {entityID: obj.entity_id})
         MERGE (os)-[:DESCRIBES_CONTROL]->(e)
     """, batch=batch)
+
 
 # ========================
 # WORKER PROCESS FOR RELATIONSHIPS
@@ -294,15 +292,15 @@ def worker_process(chunk_info, shared_counter):
         "describes_person": [],
         "person_has_address": [],
         "person_has_nationality": [],
-        "source_has_person_statement": [], 
+        "source_has_person_statement": [],
         "person_statement_has_identifier": [],
         "describes_entity": [],
         "entity_has_address": [],
-        "source_has_entity_statement": [], 
+        "source_has_entity_statement": [],
         "entity_statement_has_identifier": [],
         "person_is_interested_party": [],
         "entity_is_interested_party": [],
-        "source_has_ooc_statement": [],     
+        "source_has_ooc_statement": [],
         "ooc_has_identifier": [],
         "ooc_interest_in_entity": [],
         "ooc_has_control": []
@@ -315,7 +313,7 @@ def worker_process(chunk_info, shared_counter):
         with open(file_path, "rb") as f:
             f.seek(start_byte)
             if start_byte > 0:
-                f.readline()  # skip partial line
+                f.readline()
 
             while f.tell() <= end_byte:
                 line = f.readline()
@@ -356,22 +354,20 @@ def worker_process(chunk_info, shared_counter):
                             "url": source.get("url")
                         })
 
-                    # For personStatement -> Identifier
+                    # ENDRING: mergeKey -> identifierID (samme beregning som i Fase 1)
                     for ident in obj.get("identifiers", []):
-                        # Lag samme mergeKey som i Fase 1
-                        merge_key = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
-                        
+                        ident_id = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         batches["person_statement_has_identifier"].append({
                             "statementID": sid,
-                            "mergeKey": merge_key  # <-- Bruk mergeKey
+                            "identifierID": ident_id
                         })
 
                 elif stype == "entityStatement":
-                    batches["describes_entity"].append({"statementID": sid, "EntityID": sid})
+                    batches["describes_entity"].append({"statementID": sid, "entityID": sid})
                     for addr in obj.get("addresses", []):
                         if addr.get("address"):
                             batches["entity_has_address"].append({
-                                "EntityID": sid,
+                                "entityID": sid,
                                 "address": addr.get("address"),
                             })
                     source = obj.get("source")
@@ -380,17 +376,13 @@ def worker_process(chunk_info, shared_counter):
                             "statementID": sid,
                             "url": source.get("url")
                         })
-                        
 
-                    
-                    # For entityStatement -> Identifier
+                    # ENDRING: mergeKey -> identifierID (samme beregning som i Fase 1)
                     for ident in obj.get("identifiers", []):
-                        # Lag samme mergeKey som i Fase 1
-                        merge_key = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
-                        
+                        ident_id = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         batches["entity_statement_has_identifier"].append({
                             "statementID": sid,
-                            "mergeKey": merge_key  # <-- Bruk mergeKey
+                            "identifierID": ident_id
                         })
 
                 elif stype == "ownershipOrControlStatement":
@@ -411,7 +403,6 @@ def worker_process(chunk_info, shared_counter):
                             "statementID": sid,
                             "url": source.get("url")
                         })
-                    
 
                     subject = obj.get("subject", {})
                     subject_entity_id = subject.get("describedByEntityStatement")
@@ -440,20 +431,14 @@ def worker_process(chunk_info, shared_counter):
 
                 local_processed_count += 1
 
-                # ========================
-                # FLUSH PERIODISK
-                # ========================
                 if local_processed_count % FLUSH_EVERY == 0:
                     flush_batches(driver, batches, shared_counter, FLUSH_EVERY)
 
-            # ========================
-            # FLUSH REST OF BATCHES
-            # ========================
-            # Beregn hvor mange som ikke er flushet enda
+            # FLUSH REST
             remaining = local_processed_count % FLUSH_EVERY
-            if remaining > 0:  # ← LEGG TIL DENNE LINJEN
+            if remaining > 0:
                 flush_batches(driver, batches, shared_counter, remaining)
-            
+
     except Exception as e:
         print(f"🚨 Worker {worker_id} feilet: {e}")
     finally:
@@ -482,13 +467,11 @@ if __name__ == "__main__":
     print("🔗 FASE 2: IMPORTERER RELASJONER")
     print("=" * 50)
     
-    # Verifiser tilkobling
     print("🔌 Kobler til Neo4j...")
     main_driver = GraphDatabase.driver(URI, auth=AUTH)
     main_driver.verify_connectivity()
     main_driver.close()
     
-    # Forbered multiprosessering
     file_size = os.path.getsize(FILE_PATH)
     chunk_size = file_size // CPU_CORES
     
@@ -499,7 +482,6 @@ if __name__ == "__main__":
     processes = []
     start_time_total = datetime.now()
 
-    # Start workers
     for i in range(CPU_CORES):
         start = i * chunk_size
         end = file_size if i == CPU_CORES - 1 else (i + 1) * chunk_size
@@ -509,22 +491,18 @@ if __name__ == "__main__":
         p.start()
         processes.append(p)
 
-    # Start monitor
     monitor_p = Process(target=monitor_progress, args=(shared_counter, file_size))
     monitor_p.start()
 
-    # Vent på workers
     for p in processes:
         p.join()
     
     monitor_p.terminate()
 
-    # Sluttrapport
     print("\n🎉 Fase 2 ferdig (Alle relasjoner opprettet)!")
     print(f"Total tid: {datetime.now() - start_time_total}")
     print(f"Totalt antall objekter lest ifølge teller: {shared_counter.value}")
 
-    # Sjekk relasjoner i DB
     print("\n🔍 Sjekker relasjons-tall...")
     main_driver = GraphDatabase.driver(URI, auth=AUTH)
     with main_driver.session() as s:

@@ -56,11 +56,11 @@ def parse_share(value):
 # ========================
 
 def import_person_statements(tx, batch):
+    # ENDRING: personType fjernet fra PersonStatement-noder
     tx.run("""
         UNWIND $batch AS obj
         MERGE (ps:PersonStatement {statementID: obj.statementID})
         SET
-            ps.personType    = COALESCE(obj.personType, ps.personType),
             ps.statementType = COALESCE(obj.statementType, ps.statementType),
             ps.isComponent   = COALESCE(obj.isComponent, ps.isComponent),
             ps.statementDate = COALESCE(obj.statementDate, ps.statementDate),
@@ -72,9 +72,10 @@ def import_person_statements(tx, batch):
     """, batch=batch)
 
 def import_persons(tx, batch):
+    # ENDRING: ident -> personID
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (p:Person {ident: obj.personID})
+        MERGE (p:Person {personID: obj.personID})
         SET
             p.fullName      = COALESCE(obj.fullName, p.fullName),
             p.givenName     = COALESCE(obj.givenName, p.givenName),
@@ -103,7 +104,6 @@ def import_person_addresses(tx, batch):
     """, batch=batch)
 
 def import_person_sources(tx, batch):
-    # Constraint på Source.url håndterer unikhet
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.url IS NOT NULL
@@ -117,12 +117,11 @@ def import_person_sources(tx, batch):
     """, batch=batch)
 
 def import_person_identifiers(tx, batch):
+    # ENDRING: mergeKey fjernet, MERGE direkte på id
     tx.run("""
         UNWIND $batch AS obj
-        // MERGE på mergeKey som alltid finnes
-        MERGE (i:Identifier {mergeKey: obj.mergeKey})
-        SET i.id = obj.id,
-            i.uri = obj.uri,
+        MERGE (i:Identifier {id: obj.id})
+        SET i.uri = obj.uri,
             i.schemeName = obj.schemeName,
             i.scheme = obj.scheme
     """, batch=batch)
@@ -144,9 +143,10 @@ def import_entity_statements(tx, batch):
     """, batch=batch)
 
 def import_entitys(tx, batch):
+    # ENDRING: ident -> entityID
     tx.run("""
         UNWIND $batch AS obj
-        MERGE (f:Entity {ident: obj.EntityID})
+        MERGE (f:Entity {entityID: obj.entityID})
         SET
             f.name    = COALESCE(obj.name, f.name),
             f.alternateNames = COALESCE(obj.alternateNames, f.alternateNames),
@@ -178,15 +178,12 @@ def import_entity_sources(tx, batch):
             so.url         = COALESCE(obj.url, so.url)
     """, batch=batch)
 
-
-# --- Entity identifier nodes ---
 def import_entity_identifiers(tx, batch):
+    # ENDRING: mergeKey fjernet, MERGE direkte på id
     tx.run("""
         UNWIND $batch AS obj
-        // MERGE på mergeKey som alltid finnes
-        MERGE (i:Identifier {mergeKey: obj.mergeKey})
-        SET i.id = obj.id,
-            i.uri = obj.uri,
+        MERGE (i:Identifier {id: obj.id})
+        SET i.uri = obj.uri,
             i.schemeName = obj.schemeName,
             i.scheme = obj.scheme
     """, batch=batch)
@@ -226,16 +223,15 @@ def import_OOC_sources(tx, batch):
 # CONSTRAINTS (Kjøres i main)
 # ========================
 def create_constraints(session):
-    # Person, Entity, OOC, PersonStatement, EntityStatement, Identifier, Source
-    session.run("CREATE CONSTRAINT person_ident IF NOT EXISTS FOR (p:Person) REQUIRE p.ident IS UNIQUE")
-    session.run("CREATE CONSTRAINT entity_ident IF NOT EXISTS FOR (e:Entity) REQUIRE e.ident IS UNIQUE")
+    # ENDRING: person_ident -> person_personID, entity_ident -> entity_entityID
+    session.run("CREATE CONSTRAINT person_personID IF NOT EXISTS FOR (p:Person) REQUIRE p.personID IS UNIQUE")
+    session.run("CREATE CONSTRAINT entity_entityID IF NOT EXISTS FOR (e:Entity) REQUIRE e.entityID IS UNIQUE")
     session.run("CREATE CONSTRAINT ooc_statement_ident IF NOT EXISTS FOR (os:OOCStatement) REQUIRE os.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT person_statement_id IF NOT EXISTS FOR (ps:PersonStatement) REQUIRE ps.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT entity_statement_id IF NOT EXISTS FOR (es:EntityStatement) REQUIRE es.statementID IS UNIQUE")
     session.run("CREATE CONSTRAINT address_address IF NOT EXISTS FOR (a:Address) REQUIRE a.address IS UNIQUE")
-    session.run("CREATE CONSTRAINT identifier_mergeKey IF NOT EXISTS FOR (i:Identifier) REQUIRE i.mergeKey IS UNIQUE")
-
-    # VIKTIG: Constraint på Source URL for å håndtere unikhet
+    # ENDRING: identifier constraint på id i stedet for mergeKey
+    session.run("CREATE CONSTRAINT identifier_id IF NOT EXISTS FOR (i:Identifier) REQUIRE i.id IS UNIQUE")
     session.run("CREATE CONSTRAINT source_url IF NOT EXISTS FOR (s:Source) REQUIRE s.url IS UNIQUE")
     print("✅ Constraints created for Person, Entity, OOCStatement, PersonStatement, EntityStatement, Identifier, and Source.")
 
@@ -249,10 +245,8 @@ def worker_process(chunk_info, shared_counter):
     """
     file_path, start_byte, end_byte, worker_id = chunk_info
     
-    # Koble til Neo4j i hver prosess
     driver = GraphDatabase.driver(URI, auth=AUTH)
     
-    # Lokale batch-lister
     batches = {
         "personStatement": [], "person": [], "personaddress": [], "personsource": [], "personidentifier": [],
         "entityStatement": [], "entity": [], "entityaddress": [], "entitysource": [], "entityidentifier": [],
@@ -264,12 +258,10 @@ def worker_process(chunk_info, shared_counter):
     try:
         with open(file_path, "rb") as f:
             f.seek(start_byte)
-            # Hvis vi ikke er på starten, hopp over første (delvise) linje
             if start_byte > 0:
                 f.readline()
 
             while True:
-                # Sjekk om vi er ferdig med vår del
                 if f.tell() > end_byte:
                     break
                 
@@ -291,9 +283,9 @@ def worker_process(chunk_info, shared_counter):
                 # ========================
 
                 if stype == "personStatement":
+                    # ENDRING: personType fjernet fra PersonStatement-batch
                     batches["personStatement"].append({
                         "statementID": sid,
-                        "personType": obj.get("personType"),
                         "statementType": obj.get("statementType"),
                         "isComponent": obj.get("isComponent"),
                         "replacesStatements": obj.get("replacesStatements"),
@@ -307,8 +299,6 @@ def worker_process(chunk_info, shared_counter):
 
                     names = obj.get("names", [])
                     name = names[0] if names else {}
-                  
-                    
 
                     batches["person"].append({ 
                         "personID": sid,
@@ -320,25 +310,22 @@ def worker_process(chunk_info, shared_counter):
                         "personType": obj.get("personType")
                     })
 
-                    
                     for addr in obj.get("addresses", []):
                         if addr.get("address"):
                             batches["personaddress"].append({"address": addr.get("address"), "country": addr.get("country"), "type": addr.get("type")})
 
                     source = obj.get("source")
                     if source and source.get("url"):
-                        batches["personsource"].append(source) # Pass source dict directly, url is key
+                        batches["personsource"].append(source)
 
-
-                     # --- Person identifier nodes ---
+                    # ENDRING: mergeKey fjernet, kun id brukes
                     for ident in obj.get("identifiers", []):
-                        # Lag mergeKey: id hvis finnes, ellers uri, ellers schemeName:id
-                        merge_key = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
-                        
-                        # Legg til node-batch
+                        ident_id = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         batches["personidentifier"].append({
-                            **ident,
-                            "mergeKey": merge_key
+                            "id": ident_id,
+                            "uri": ident.get("uri"),
+                            "schemeName": ident.get("schemeName"),
+                            "scheme": ident.get("scheme")
                         })
 
                 elif stype == "entityStatement":
@@ -356,7 +343,7 @@ def worker_process(chunk_info, shared_counter):
                     })
 
                     batches["entity"].append({
-                        "EntityID": sid,
+                        "entityID": sid,
                         "name": obj.get("name"),
                         "alternateNames": obj.get("alternateNames"),
                         "entityType": obj.get("entityType"),
@@ -374,15 +361,14 @@ def worker_process(chunk_info, shared_counter):
                     if source and source.get("url"):
                         batches["entitysource"].append(source)
 
-                    # --- Entity identifier nodes ---
+                    # ENDRING: mergeKey fjernet, kun id brukes
                     for ident in obj.get("identifiers", []):
-                        # Lag mergeKey: id hvis finnes, ellers uri, ellers schemeName:id
-                        merge_key = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
-                        
-                        # Legg til node-batch
+                        ident_id = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         batches["entityidentifier"].append({
-                            **ident,
-                            "mergeKey": merge_key
+                            "id": ident_id,
+                            "uri": ident.get("uri"),
+                            "schemeName": ident.get("schemeName"),
+                            "scheme": ident.get("scheme")
                         })
 
                 elif stype == "ownershipOrControlStatement":
@@ -410,8 +396,8 @@ def worker_process(chunk_info, shared_counter):
                 # ========================
                 # FLUSH BATCHES (Hvis full)
                 # ========================
-                FLUSH_EVERY = 2000  # start her
-                if local_processed_count % FLUSH_EVERY == 0:  # Sjekk batchstørrelser
+                FLUSH_EVERY = 2000
+                if local_processed_count % FLUSH_EVERY == 0:
                     with driver.session() as s:
                         if len(batches["personStatement"]) >= BATCH_SIZE:
                             run_with_retry(s, import_person_statements, batches["personStatement"])
@@ -419,7 +405,6 @@ def worker_process(chunk_info, shared_counter):
                         if len(batches["person"]) >= BATCH_SIZE:
                             run_with_retry(s, import_persons, batches["person"])
                             batches["person"].clear()
-                      
                         if len(batches["personaddress"]) >= BATCH_SIZE:
                             run_with_retry(s, import_person_addresses, batches["personaddress"])
                             batches["personaddress"].clear()
@@ -453,10 +438,9 @@ def worker_process(chunk_info, shared_counter):
                             run_with_retry(s, import_OOC_sources, batches["OOCsource"])
                             batches["OOCsource"].clear()
                     
-                    # Oppdater delt teller (trygt med multiprosessering)
                     with shared_counter.get_lock():
                         shared_counter.value += local_processed_count
-                    local_processed_count = 0 # Nullstill lokal for å unngå dobbelttelling i batchlogikk
+                    local_processed_count = 0
 
             # ========================
             # FLUSH REST (Slutten av chunk)
@@ -489,7 +473,6 @@ def worker_process(chunk_info, shared_counter):
                 if batches["OOCsource"]:
                     run_with_retry(s, import_OOC_sources, batches["OOCsource"])
             
-            # Oppdater teller med resten
             if local_processed_count > 0:
                 with shared_counter.get_lock():
                     shared_counter.value += local_processed_count
@@ -508,15 +491,13 @@ def monitor_progress(shared_counter, total_file_size):
         time.sleep(LOG_INTERVAL)
         current_count = shared_counter.value
         elapsed = datetime.now() - start_time
-        
-        # Hvis vi vil stoppe (dette er en enkel implementasjon, main dreper prosessen når ferdig)
         print(f"📊 Processed objects: {current_count} | Tid: {elapsed}")
 
 def prepopulate_nationalities(session, file_path):
     """Les gjennom filen én gang og lag alle unike Nationality-noder"""
     print("🌍 Pre-populerer Nationality-noder...")
     
-    unique_nationalities = {}  # {code: name}
+    unique_nationalities = {}
     
     with open(file_path, "rb") as f:
         for line in f:
@@ -532,7 +513,6 @@ def prepopulate_nationalities(session, file_path):
     
     print(f"   Funnet {len(unique_nationalities)} unike nasjonaliteter")
     
-    # Opprett alle på en gang
     batch = [{"code": code, "name": name} for code, name in unique_nationalities.items()]
     
     session.execute_write(lambda tx: tx.run("""
@@ -542,6 +522,7 @@ def prepopulate_nationalities(session, file_path):
     """, batch=batch))
     
     print(f"   ✅ {len(unique_nationalities)} Nationality-noder opprettet")
+
 # ========================
 # MAIN
 # ========================
@@ -549,30 +530,24 @@ if __name__ == "__main__":
     if not os.path.exists(FILE_PATH):
         raise FileNotFoundError(FILE_PATH)
     
-    # 1. Oppsett av DB og Constraints
     print("🔌 Kobler til Neo4j for oppsett...")
     main_driver = GraphDatabase.driver(URI, auth=AUTH)
     main_driver.verify_connectivity()
     with main_driver.session() as s:
         create_constraints(s)
-        prepopulate_nationalities(s, FILE_PATH)  # ← Pre-populer Nationality-noder
+        prepopulate_nationalities(s, FILE_PATH)
     main_driver.close()
     
-    # 2. Forbered Multiprosessering
     file_size = os.path.getsize(FILE_PATH)
     chunk_size = file_size // CPU_CORES
     
     print(f"📦 Filstørrelse: {file_size / (1024*1024):.2f} MB")
     print(f"🚀 Starter {CPU_CORES} workers...")
 
-    # Delt teller for alle prosessene
     shared_counter = Value('i', 0) 
-    
     processes = []
-    
     start_time_total = datetime.now()
 
-    # 3. Start Workers
     for i in range(CPU_CORES):
         start = i * chunk_size
         end = file_size if i == CPU_CORES - 1 else (i + 1) * chunk_size
@@ -582,23 +557,18 @@ if __name__ == "__main__":
         p.start()
         processes.append(p)
 
-    # 4. Start Monitor (for visuell output mens importen kjører)
     monitor_p = Process(target=monitor_progress, args=(shared_counter, file_size))
     monitor_p.start()
 
-    # 5. Vent på at alle workers er ferdige
     for p in processes:
         p.join()
     
-    # Stopp monitor
     monitor_p.terminate()
 
-    # 6. Sluttrapport
     print("\n🎉 Fase 1 ferdig (Alle noder opprettet)!")
     print(f"Total tid: {datetime.now() - start_time_total}")
     print(f"Totalt antall objekter lest ifølge teller: {shared_counter.value}")
 
-    # Sjekk faktiske tall i DB
     print("\n🔍 Sjekker database-tall...")
     main_driver = GraphDatabase.driver(URI, auth=AUTH)
     with main_driver.session() as s:
