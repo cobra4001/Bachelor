@@ -44,11 +44,11 @@ app = FastAPI(lifespan=lifespan)
 # RESPONSE MODELS
 # -------------------------
 class KnownPersonResponse(BaseModel):
-    ident: str
+    personID: str
     is_known_person: bool
 
 class PersonDetailResponse(BaseModel):
-    ident: str
+    personID: str
     fullName: Optional[str] = None
     birthDate: Optional[str] = None
     familyName: Optional[str] = None
@@ -56,11 +56,11 @@ class PersonDetailResponse(BaseModel):
     personType: Optional[str] = None
 
 class RegisteredEntityResponse(BaseModel):
-    ident: str
+    entityID: str
     is_registered_entity: bool    
 
 class EntityDetailResponse(BaseModel):
-    ident: str
+    entityID: str
     name: Optional[str] = None
     alternateNames: Optional[str] = None
     entityType: Optional[str] = None
@@ -79,53 +79,53 @@ async def get_session():
 # -------------------------
 # CYPHER / DB FUNCTIONS
 # -------------------------
-async def check_known_person(session, ident: str):
+async def check_known_person(session, personID: str):
     query = """
-    MATCH (p:Person {ident: $ident})
-    RETURN p.ident AS ident,
+    MATCH (p:Person {personID: $personID})
+    RETURN p.personID AS personID,
            p IS NOT NULL AS is_known_person
     """
-    result = await session.run(query, ident=ident)
+    result = await session.run(query, personID=personID)
     record = await result.single()
     if not record:
         return None
     return {
-        "ident": record["ident"],
+        "personID": record["personID"],
         "is_known_person": record["is_known_person"]
     }
 
-async def get_person_details(session, ident: str):
+async def get_person_details(session, personID: str):
     query = """
-    MATCH (p:Person {ident: $ident})
-    RETURN p.ident AS ident,
+    MATCH (p:Person {personID: $personID})
+    RETURN p.personID AS personID,
            p.fullName AS fullName,
            p.birthDate AS birthDate,
            p.familyName AS familyName,
            p.givenName AS givenName,
            p.personType AS personType
     """
-    result = await session.run(query, ident=ident)
+    result = await session.run(query, personID=personID)
     record = await result.single()
     if not record:
         return None
     return dict(record)
 
-async def check_registered_entity(session, ident: str):
+async def check_registered_entity(session, entityID: str):
     query = """
-    MATCH (e:Entity {ident: $ident})
-    RETURN e.ident AS ident,
+    MATCH (e:Entity {entityID: $entityID})
+    RETURN e.entityID AS entityID,
            e IS NOT NULL AS is_registered_entity
     """
-    result = await session.run(query, ident=ident)
+    result = await session.run(query, entityID=entityID)
     record = await result.single()
     if not record:
         return None
     return dict(record)
 
-async def get_entity_details(session, ident: str):
+async def get_entity_details(session, entityID: str):
     query = """
-    MATCH (e:Entity {ident: $ident})
-    RETURN e.ident AS ident,
+    MATCH (e:Entity {entityID: $entityID})
+    RETURN e.entityID AS entityID,
            e.name AS name,
            e.alternateNames AS alternateNames,
            e.entityType AS entityType,
@@ -134,7 +134,7 @@ async def get_entity_details(session, ident: str):
            e.incorporatedInJurisdiction_code AS incorporatedInJurisdiction_code,
            e.dissolutionDate AS dissolutionDate
     """
-    result = await session.run(query, ident=ident)
+    result = await session.run(query, entityID=entityID)
     record = await result.single()
     if not record:
         return None
@@ -143,30 +143,30 @@ async def get_entity_details(session, ident: str):
 # -------------------------
 # ROUTES / ENDPOINTS
 # -------------------------
-@app.get("/Person/{ident}/known", response_model=KnownPersonResponse)
-async def is_known_person(ident: str, session=Depends(get_session)):
-    data = await check_known_person(session, ident)
+@app.get("/Person/{personID}/known", response_model=KnownPersonResponse)
+async def is_known_person(personID: str, session=Depends(get_session)):
+    data = await check_known_person(session, personID)
     if not data:
         raise HTTPException(status_code=404, detail="Person not found")
     return data
 
-@app.get("/Person/{ident}/details", response_model=PersonDetailResponse)
-async def person_details_endpoint(ident: str, session=Depends(get_session)):
-    data = await get_person_details(session, ident)
+@app.get("/Person/{personID}/details", response_model=PersonDetailResponse)
+async def person_details_endpoint(personID: str, session=Depends(get_session)):
+    data = await get_person_details(session, personID)
     if not data:
         raise HTTPException(status_code=404, detail="Person not found")
     return data
 
-@app.get("/Entity/{ident}/registered", response_model=RegisteredEntityResponse)
-async def is_registered_entity(ident: str, session=Depends(get_session)):
-    data = await check_registered_entity(session, ident)
+@app.get("/Entity/{entityID}/registered", response_model=RegisteredEntityResponse)
+async def is_registered_entity(entityID: str, session=Depends(get_session)):
+    data = await check_registered_entity(session, entityID)
     if not data:
         raise HTTPException(status_code=404, detail="Entity not found")
     return data
 
-@app.get("/Entity/{ident}/details", response_model=EntityDetailResponse)
-async def entity_details_endpoint(ident: str, session=Depends(get_session)):
-    data = await get_entity_details(session, ident)
+@app.get("/Entity/{entityID}/details", response_model=EntityDetailResponse)
+async def entity_details_endpoint(entityID: str, session=Depends(get_session)):
+    data = await get_entity_details(session, entityID)
     if not data:
         raise HTTPException(status_code=404, detail="Entity not found")
     return data
