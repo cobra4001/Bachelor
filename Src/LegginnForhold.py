@@ -119,7 +119,7 @@ def parse_share(value):
 
 def create_describes_person_relationships(tx, batch):
     """PersonStatement -[:DESCRIBES_PERSON]-> Person"""
-    # ENDRING: p.ident -> p.personID
+    
     tx.run("""
         UNWIND $batch AS obj
         MATCH (ps:PersonStatement {statementID: obj.statementID})
@@ -130,7 +130,7 @@ def create_describes_person_relationships(tx, batch):
 
 def create_person_has_address_relationships(tx, batch):
     """Person -[:HAS_ADDRESS]-> Address"""
-    # ENDRING: p.ident -> p.personID
+    
     tx.run("""
         UNWIND $batch AS obj
         MATCH (p:Person {personID: obj.personID})
@@ -140,7 +140,7 @@ def create_person_has_address_relationships(tx, batch):
 
 
 def create_person_has_nationality_relationships(tx, batch):
-    # ENDRING: p.ident -> p.personID
+ 
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.personID IS NOT NULL AND obj.code IS NOT NULL
@@ -161,7 +161,7 @@ def create_source_has_person_statement(tx, batch):
 
 
 def create_person_statement_has_identifier_relationships(tx, batch):
-    # ENDRING: mergeKey -> id
+  
     tx.run("""
         UNWIND $batch AS obj
         MATCH (ps:PersonStatement {statementID: obj.statementID})
@@ -172,7 +172,7 @@ def create_person_statement_has_identifier_relationships(tx, batch):
 
 def create_describes_entity_relationships(tx, batch):
     """EntityStatement -[:DESCRIBES_ENTITY]-> Entity"""
-    # ENDRING: e.ident -> e.entityID
+    
     tx.run("""
         UNWIND $batch AS obj
         MATCH (es:EntityStatement {statementID: obj.statementID})
@@ -183,7 +183,7 @@ def create_describes_entity_relationships(tx, batch):
 
 def create_entity_has_address_relationships(tx, batch):
     """Entity -[:HAS_ADDRESS]-> Address"""
-    # ENDRING: e.ident -> e.entityID
+  
     tx.run("""
         UNWIND $batch AS obj
         MATCH (e:Entity {entityID: obj.entityID})
@@ -203,7 +203,7 @@ def create_source_has_entity_statement(tx, batch):
 
 
 def create_entity_statement_has_identifier_relationships(tx, batch):
-    # ENDRING: mergeKey -> id
+   
     tx.run("""
         UNWIND $batch AS obj
         MATCH (es:EntityStatement {statementID: obj.statementID})
@@ -224,7 +224,7 @@ def create_source_has_ooc_statement(tx, batch):
 
 def create_person_is_interested_party_relationships(tx, batch):
     """Person -[:IS_INTERESTED_PARTY]-> OOCStatement"""
-    # ENDRING: p.ident -> p.personID
+    
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.interestedParty_describedByPersonStatement IS NOT NULL
@@ -236,7 +236,7 @@ def create_person_is_interested_party_relationships(tx, batch):
 
 def create_entity_is_interested_party_relationships(tx, batch):
     """Entity -[:IS_INTERESTED_PARTY]-> OOCStatement"""
-    # ENDRING: e.ident -> e.entityID
+   
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.interestedParty_describedByEntityStatement IS NOT NULL
@@ -248,7 +248,7 @@ def create_entity_is_interested_party_relationships(tx, batch):
 
 def create_ooc_interest_in_entity_relationships(tx, batch):
     """OOCStatement -[:DESCRIBES_OWNERSHIP]-> Entity"""
-    # ENDRING: e.ident -> e.entityID
+   
     tx.run("""
     UNWIND $batch AS obj
     WITH obj WHERE obj.subject_id IS NOT NULL
@@ -271,7 +271,7 @@ def create_ooc_interest_in_entity_relationships(tx, batch):
 
 def create_ooc_has_control_relationships(tx, batch):
     """OOCStatement -[:DESCRIBES_CONTROL]-> Entity"""
-    # ENDRING: e.ident -> e.entityID
+   
     tx.run("""
         UNWIND $batch AS obj
         WITH obj WHERE obj.entity_id IS NOT NULL
@@ -354,7 +354,7 @@ def worker_process(chunk_info, shared_counter):
                             "url": source.get("url")
                         })
 
-                    # ENDRING: mergeKey -> identifierID (samme beregning som i Fase 1)
+                   
                     for ident in obj.get("identifiers", []):
                         ident_id = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         batches["person_statement_has_identifier"].append({
@@ -377,7 +377,7 @@ def worker_process(chunk_info, shared_counter):
                             "url": source.get("url")
                         })
 
-                    # ENDRING: mergeKey -> identifierID (samme beregning som i Fase 1)
+                 
                     for ident in obj.get("identifiers", []):
                         ident_id = ident.get("id") or ident.get("uri") or f"{ident.get('schemeName')}:{ident.get('id')}"
                         batches["entity_statement_has_identifier"].append({
