@@ -53,6 +53,7 @@ class PersonDetailResponse(BaseModel):
     birthDate: Optional[str] = None
     familyName: Optional[str] = None
     givenName: Optional[str] = None
+    type: Optional[str] = None
     personType: Optional[str] = None
 
 class RegisteredEntityResponse(BaseModel):
@@ -102,6 +103,7 @@ async def get_person_details(session, personID: str):
            p.birthDate AS birthDate,
            p.familyName AS familyName,
            p.givenName AS givenName,
+           p.type AS type,
            p.personType AS personType
     """
     result = await session.run(query, personID=personID)
