@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+neo4j
+python-jose
+passlib[bcrypt]
+pydantic
+
+
