@@ -133,12 +133,36 @@ async def lifespan(app: FastAPI):
     try:
         await driver.verify_connectivity()
         print("✅ Koblet til Neo4j!")
+        async with driver.session() as session:
+            await session.run("""
+                CREATE INDEX inv_link_entity IF NOT EXISTS
+                FOR ()-[r:INVESTIGATION_LINK]-()
+                ON (r.sharedEntityID)
+            """)
     except Exception as e:
         print("❌ Klarte ikke koble til Neo4j:", e)
     yield
     await driver.close()
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    lifespan=lifespan,
+    title="OpenOwnership API",
+    description="""
+## API for søk i eierstruktur og etterforskningsrelasjoner
+
+### Graf-logikk for eierskap/kontroll
+```
+Person/Entity -[IS_INTERESTED_PARTY]-> OOCStatement -[DESCRIBES_OWNERSHIP]-> Entity
+Person/Entity -[IS_INTERESTED_PARTY]-> OOCStatement -[DESCRIBES_CONTROL]-> Entity
+```
+
+### Graf-logikk for etterforskningsrelasjoner
+```
+Person -[INVESTIGATION_LINK {tag, note, created_by, expires_at}]-> Person
+```
+Koblingen krever at begge personene er knyttet til samme firma via OOC-grafen.
+    """,
+)
 
 # =========================================================
 # 📜 MIDDLEWARE — LOGGER ALLE REQUESTS
@@ -301,7 +325,7 @@ def update_user(
     return {"msg": f"Password for '{username}' updated successfully"}
 
 # =========================================================
-# 📦 RESPONSE MODELS — PERSON OG ENTITY (BASIS)
+# 📦 RESPONSE MODELS — BASIS
 # =========================================================
 
 class KnownPersonResponse(BaseModel):
@@ -332,7 +356,7 @@ class EntityDetailResponse(BaseModel):
     dissolutionDate: Optional[str] = None
 
 # =========================================================
-# 📦 RESPONSE MODELS — TILKOBLINGER
+# 📦 RESPONSE MODELS — OOC TILKOBLINGER
 # =========================================================
 
 class OwnershipEntry(BaseModel):
@@ -363,12 +387,12 @@ class ControlEntry(BaseModel):
 class PersonConnectionsResponse(BaseModel):
     personID: str
     fullName: Optional[str] = None
-    owns: list[OwnershipEntry] = []     # Kan være tom liste
-    controls: list[ControlEntry] = []  # Kan være tom liste
+    owns: list[OwnershipEntry] = []
+    controls: list[ControlEntry] = []
 
 class OwnerEntry(BaseModel):
     personID: Optional[str] = None
-    entityID: Optional[str] = None     # Satt hvis eier er et selskap
+    entityID: Optional[str] = None
     fullName: Optional[str] = None
     name: Optional[str] = None
     statementID: Optional[str] = None
@@ -385,7 +409,7 @@ class OwnerEntry(BaseModel):
 
 class ControllerEntry(BaseModel):
     personID: Optional[str] = None
-    entityID: Optional[str] = None     # Satt hvis kontrollant er et selskap
+    entityID: Optional[str] = None
     fullName: Optional[str] = None
     name: Optional[str] = None
     statementID: Optional[str] = None
@@ -396,8 +420,51 @@ class ControllerEntry(BaseModel):
 class EntityConnectionsResponse(BaseModel):
     entityID: str
     name: Optional[str] = None
-    ownership: list[OwnerEntry] = []    # Hvem eier selskapet
-    control: list[ControllerEntry] = [] # Hvem kontrollerer selskapet
+    ownership: list[OwnerEntry] = []
+    control: list[ControllerEntry] = []
+
+# =========================================================
+# 📦 RESPONSE MODELS — ETTERFORSKNINGSRELASJONER
+# =========================================================
+
+class InvestigationLinkCreate(BaseModel):
+    """
+    Body for å opprette en etterforskningsrelasjon mellom to personer.
+
+    - **fromPersonID**: personID koblingen går FRA
+    - **toPersonID**: personID koblingen går TIL
+    - **sharedEntityID**: entityID på firmaet begge er koblet til (brukes til validering)
+    - **tag**: hashtag-etikett, f.eks. '#hvitvasking' eller '#korrupsjon'
+    - **note**: valgfri fritekst
+    - **expires_at**: ISO-dato for utløp (None = permanent kobling)
+    """
+    fromPersonID: str
+    toPersonID: str
+    sharedEntityID: str
+    tag: str
+    note: Optional[str] = None
+    expires_at: Optional[str] = None  # ISO 8601, f.eks. "2025-12-31"
+
+class InvestigationLinkResponse(BaseModel):
+    linkID: str                          # Neo4j elementId på relasjonen
+    fromPersonID: str
+    fromPersonName: Optional[str] = None
+    toPersonID: str
+    toPersonName: Optional[str] = None
+    sharedEntityID: str
+    sharedEntityName: Optional[str] = None
+    tag: str
+    note: Optional[str] = None
+    created_by: str
+    created_at: str
+    expires_at: Optional[str] = None
+    is_expired: bool = False
+
+class InvestigationLinkUpdate(BaseModel):
+    """Felt som kan oppdateres etter opprettelse. Utelatte felt endres ikke."""
+    tag: Optional[str] = None
+    note: Optional[str] = None
+    expires_at: Optional[str] = None
 
 # =========================================================
 # 🧠 DB SESSION
@@ -471,22 +538,14 @@ async def get_entity_details(session, entityID: str):
     return dict(record)
 
 # =========================================================
-# 🧾 CYPHER FUNKSJONER — TILKOBLINGER
-#
-# Graf-sti:
-#   Person/Entity -[:IS_INTERESTED_PARTY]->
-#   OOCStatement  -[:DESCRIBES_OWNERSHIP / :DESCRIBES_CONTROL]->
-#   Entity
+# 🧾 CYPHER FUNKSJONER — OOC TILKOBLINGER
 # =========================================================
 
 async def get_person_connections(session, personID: str):
-    """Hva en person eier og kontrollerer via OOCStatement."""
-
     person_query = """
         MATCH (p:Person {personID: $personID})
         RETURN p.personID AS personID, p.fullName AS fullName
     """
-
     owns_query = """
         MATCH (p:Person {personID: $personID})
               -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
@@ -508,7 +567,6 @@ async def get_person_connections(session, personID: str):
             r.endDate                AS endDate
         ORDER BY r.share_exact DESC
     """
-
     controls_query = """
         MATCH (p:Person {personID: $personID})
               -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
@@ -522,18 +580,14 @@ async def get_person_connections(session, personID: str):
             r.startDate      AS startDate,
             r.endDate        AS endDate
     """
-
     person_result = await session.run(person_query, personID=personID)
     person_record = await person_result.single()
     if not person_record:
         return None
-
-    owns_result  = await session.run(owns_query,     personID=personID)
+    owns_result  = await session.run(owns_query, personID=personID)
     owns_records = await owns_result.data()
-
     ctrl_result  = await session.run(controls_query, personID=personID)
     ctrl_records = await ctrl_result.data()
-
     return {
         "personID": person_record["personID"],
         "fullName": person_record["fullName"],
@@ -543,112 +597,327 @@ async def get_person_connections(session, personID: str):
 
 
 async def get_entity_connections(session, entityID: str):
-    """
-    Hvem eier og kontrollerer et selskap.
-    Interessenten kan være Person ELLER Entity (selskap eier selskap).
-    """
-
     entity_query = """
         MATCH (e:Entity {entityID: $entityID})
         RETURN e.entityID AS entityID, e.name AS name
     """
-
-    # --- Eiere: person interessent ---
     ownership_person_query = """
         MATCH (p:Person)
               -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
               -[r:DESCRIBES_OWNERSHIP]->(e:Entity {entityID: $entityID})
         RETURN
-            p.personID               AS personID,
-            null                     AS entityID,
-            p.fullName               AS fullName,
-            null                     AS name,
-            os.statementID           AS statementID,
-            os.statementDate         AS statementDate,
-            r.type                   AS interest_type,
-            r.share_exact            AS share_exact,
-            r.share_minimum          AS share_minimum,
-            r.share_maximum          AS share_maximum,
+            p.personID AS personID, null AS entityID,
+            p.fullName AS fullName, null AS name,
+            os.statementID AS statementID, os.statementDate AS statementDate,
+            r.type AS interest_type, r.share_exact AS share_exact,
+            r.share_minimum AS share_minimum, r.share_maximum AS share_maximum,
             r.share_exclusiveMinimum AS share_exclusiveMinimum,
             r.share_exclusiveMaximum AS share_exclusiveMaximum,
-            r.details                AS details,
-            r.startDate              AS startDate,
-            r.endDate                AS endDate
+            r.details AS details, r.startDate AS startDate, r.endDate AS endDate
         ORDER BY r.share_exact DESC
     """
-
-    # --- Eiere: entity interessent (selskap eier selskap) ---
     ownership_entity_query = """
         MATCH (owner:Entity)
               -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
               -[r:DESCRIBES_OWNERSHIP]->(e:Entity {entityID: $entityID})
         RETURN
-            null                     AS personID,
-            owner.entityID           AS entityID,
-            null                     AS fullName,
-            owner.name               AS name,
-            os.statementID           AS statementID,
-            os.statementDate         AS statementDate,
-            r.type                   AS interest_type,
-            r.share_exact            AS share_exact,
-            r.share_minimum          AS share_minimum,
-            r.share_maximum          AS share_maximum,
+            null AS personID, owner.entityID AS entityID,
+            null AS fullName, owner.name AS name,
+            os.statementID AS statementID, os.statementDate AS statementDate,
+            r.type AS interest_type, r.share_exact AS share_exact,
+            r.share_minimum AS share_minimum, r.share_maximum AS share_maximum,
             r.share_exclusiveMinimum AS share_exclusiveMinimum,
             r.share_exclusiveMaximum AS share_exclusiveMaximum,
-            r.details                AS details,
-            r.startDate              AS startDate,
-            r.endDate                AS endDate
+            r.details AS details, r.startDate AS startDate, r.endDate AS endDate
         ORDER BY r.share_exact DESC
     """
-
-    # --- Kontrollanter: person ---
     control_person_query = """
         MATCH (p:Person)
               -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
               -[r:DESCRIBES_CONTROL]->(e:Entity {entityID: $entityID})
         RETURN
-            p.personID       AS personID,
-            null             AS entityID,
-            p.fullName       AS fullName,
-            null             AS name,
-            os.statementID   AS statementID,
-            os.statementDate AS statementDate,
-            r.startDate      AS startDate,
-            r.endDate        AS endDate
+            p.personID AS personID, null AS entityID,
+            p.fullName AS fullName, null AS name,
+            os.statementID AS statementID, os.statementDate AS statementDate,
+            r.startDate AS startDate, r.endDate AS endDate
     """
-
-    # --- Kontrollanter: entity ---
     control_entity_query = """
         MATCH (owner:Entity)
               -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
               -[r:DESCRIBES_CONTROL]->(e:Entity {entityID: $entityID})
         RETURN
-            null             AS personID,
-            owner.entityID   AS entityID,
-            null             AS fullName,
-            owner.name       AS name,
-            os.statementID   AS statementID,
-            os.statementDate AS statementDate,
-            r.startDate      AS startDate,
-            r.endDate        AS endDate
+            null AS personID, owner.entityID AS entityID,
+            null AS fullName, owner.name AS name,
+            os.statementID AS statementID, os.statementDate AS statementDate,
+            r.startDate AS startDate, r.endDate AS endDate
     """
-
     entity_result = await session.run(entity_query, entityID=entityID)
     entity_record = await entity_result.single()
     if not entity_record:
         return None
-
     own_p  = await (await session.run(ownership_person_query, entityID=entityID)).data()
     own_e  = await (await session.run(ownership_entity_query, entityID=entityID)).data()
     ctrl_p = await (await session.run(control_person_query,   entityID=entityID)).data()
     ctrl_e = await (await session.run(control_entity_query,   entityID=entityID)).data()
-
     return {
         "entityID":  entity_record["entityID"],
         "name":      entity_record["name"],
         "ownership": own_p + own_e,
         "control":   ctrl_p + ctrl_e,
     }
+
+# =========================================================
+# 🧾 CYPHER FUNKSJONER — ETTERFORSKNINGSRELASJONER
+# =========================================================
+
+def _format_link(record: dict) -> dict:
+    """Mapper en Neo4j-rad til InvestigationLinkResponse-dict."""
+    now = datetime.utcnow().isoformat()
+    expires = record.get("expires_at")
+    return {
+        "linkID":           record["linkID"],
+        "fromPersonID":     record["fromPersonID"],
+        "fromPersonName":   record.get("fromPersonName"),
+        "toPersonID":       record["toPersonID"],
+        "toPersonName":     record.get("toPersonName"),
+        "sharedEntityID":   record["sharedEntityID"],
+        "sharedEntityName": record.get("sharedEntityName"),
+        "tag":              record["tag"],
+        "note":             record.get("note"),
+        "created_by":       record["created_by"],
+        "created_at":       record["created_at"],
+        "expires_at":       expires,
+        "is_expired":       bool(expires and expires < now),
+    }
+
+
+async def db_create_investigation_link(
+    session, body: InvestigationLinkCreate, created_by: str
+) -> dict:
+    """
+    Steg 1: Valider at begge personene er koblet til sharedEntityID via OOC-grafen.
+    Steg 2: Opprett INVESTIGATION_LINK med alle metadata.
+    """
+    validate_query = """
+        MATCH (fromP:Person {personID: $fromPersonID})
+              -[:IS_INTERESTED_PARTY]->(:OOCStatement)
+              -[:DESCRIBES_OWNERSHIP|DESCRIBES_CONTROL]->(e:Entity {entityID: $sharedEntityID})
+        WITH fromP, e
+        MATCH (toP:Person {personID: $toPersonID})
+              -[:IS_INTERESTED_PARTY]->(:OOCStatement)
+              -[:DESCRIBES_OWNERSHIP|DESCRIBES_CONTROL]->(e)
+        RETURN
+            fromP.personID AS fromPersonID,
+            fromP.fullName AS fromPersonName,
+            toP.personID   AS toPersonID,
+            toP.fullName   AS toPersonName,
+            e.entityID     AS entityID,
+            e.name         AS entityName
+        LIMIT 1
+    """
+    val_result = await session.run(
+        validate_query,
+        fromPersonID=body.fromPersonID,
+        toPersonID=body.toPersonID,
+        sharedEntityID=body.sharedEntityID,
+    )
+    val_record = await val_result.single()
+
+    if not val_record:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Validering feilet: Begge personene ({body.fromPersonID}, {body.toPersonID}) "
+                f"må være koblet til firma {body.sharedEntityID} via OOC-grafen."
+            ),
+        )
+
+    now = datetime.utcnow().isoformat()
+    tag = body.tag if body.tag.startswith("#") else f"#{body.tag}"
+
+    create_query = """
+        MATCH (fromP:Person {personID: $fromPersonID})
+        MATCH (toP:Person   {personID: $toPersonID})
+        CREATE (fromP)-[r:INVESTIGATION_LINK {
+            sharedEntityID: $sharedEntityID,
+            tag:            $tag,
+            note:           $note,
+            created_by:     $created_by,
+            created_at:     $created_at,
+            expires_at:     $expires_at
+        }]->(toP)
+        RETURN elementId(r) AS linkID
+    """
+    create_result = await session.run(
+        create_query,
+        fromPersonID=body.fromPersonID,
+        toPersonID=body.toPersonID,
+        sharedEntityID=body.sharedEntityID,
+        tag=tag,
+        note=body.note,
+        created_by=created_by,
+        created_at=now,
+        expires_at=body.expires_at,
+    )
+    create_record = await create_result.single()
+
+    return _format_link({
+        "linkID":           create_record["linkID"],
+        "fromPersonID":     val_record["fromPersonID"],
+        "fromPersonName":   val_record["fromPersonName"],
+        "toPersonID":       val_record["toPersonID"],
+        "toPersonName":     val_record["toPersonName"],
+        "sharedEntityID":   val_record["entityID"],
+        "sharedEntityName": val_record["entityName"],
+        "tag":              tag,
+        "note":             body.note,
+        "created_by":       created_by,
+        "created_at":       now,
+        "expires_at":       body.expires_at,
+    })
+
+
+async def db_get_links_for_person(session, personID: str) -> list[dict]:
+    """Alle INVESTIGATION_LINK der personen er kilde eller mål."""
+    query = """
+        MATCH (fromP:Person)-[r:INVESTIGATION_LINK]->(toP:Person)
+        WHERE fromP.personID = $personID OR toP.personID = $personID
+        OPTIONAL MATCH (e:Entity {entityID: r.sharedEntityID})
+        RETURN
+            elementId(r)     AS linkID,
+            fromP.personID   AS fromPersonID,
+            fromP.fullName   AS fromPersonName,
+            toP.personID     AS toPersonID,
+            toP.fullName     AS toPersonName,
+            r.sharedEntityID AS sharedEntityID,
+            e.name           AS sharedEntityName,
+            r.tag            AS tag,
+            r.note           AS note,
+            r.created_by     AS created_by,
+            r.created_at     AS created_at,
+            r.expires_at     AS expires_at
+        ORDER BY r.created_at DESC
+    """
+    result = await session.run(query, personID=personID)
+    records = await result.data()
+    return [_format_link(r) for r in records]
+
+
+async def db_get_links_for_entity(session, entityID: str) -> list[dict]:
+    """Alle INVESTIGATION_LINK mellom personer koblet til et bestemt firma."""
+    query = """
+        MATCH (fromP:Person)-[r:INVESTIGATION_LINK]->(toP:Person)
+        WHERE r.sharedEntityID = $entityID
+        OPTIONAL MATCH (e:Entity {entityID: $entityID})
+        RETURN
+            elementId(r)     AS linkID,
+            fromP.personID   AS fromPersonID,
+            fromP.fullName   AS fromPersonName,
+            toP.personID     AS toPersonID,
+            toP.fullName     AS toPersonName,
+            r.sharedEntityID AS sharedEntityID,
+            e.name           AS sharedEntityName,
+            r.tag            AS tag,
+            r.note           AS note,
+            r.created_by     AS created_by,
+            r.created_at     AS created_at,
+            r.expires_at     AS expires_at
+        ORDER BY r.created_at DESC
+    """
+    result = await session.run(query, entityID=entityID)
+    records = await result.data()
+    return [_format_link(r) for r in records]
+
+
+async def db_update_investigation_link(
+    session, link_id: str, body: InvestigationLinkUpdate, updated_by: str
+) -> dict:
+    """Oppdaterer bare de feltene som er sendt inn (COALESCE-logikk)."""
+    tag = body.tag
+    if tag and not tag.startswith("#"):
+        tag = f"#{tag}"
+
+    query = """
+        MATCH ()-[r:INVESTIGATION_LINK]->()
+        WHERE elementId(r) = $link_id
+        SET
+            r.tag        = COALESCE($tag,        r.tag),
+            r.note       = COALESCE($note,       r.note),
+            r.expires_at = COALESCE($expires_at, r.expires_at),
+            r.updated_by = $updated_by,
+            r.updated_at = $updated_at
+        WITH r
+        MATCH (fromP:Person)-[r]->(toP:Person)
+        OPTIONAL MATCH (e:Entity {entityID: r.sharedEntityID})
+        RETURN
+            elementId(r)     AS linkID,
+            fromP.personID   AS fromPersonID,
+            fromP.fullName   AS fromPersonName,
+            toP.personID     AS toPersonID,
+            toP.fullName     AS toPersonName,
+            r.sharedEntityID AS sharedEntityID,
+            e.name           AS sharedEntityName,
+            r.tag            AS tag,
+            r.note           AS note,
+            r.created_by     AS created_by,
+            r.created_at     AS created_at,
+            r.expires_at     AS expires_at
+    """
+    result = await session.run(
+        query,
+        link_id=link_id,
+        tag=tag,
+        note=body.note,
+        expires_at=body.expires_at,
+        updated_by=updated_by,
+        updated_at=datetime.utcnow().isoformat(),
+    )
+    record = await result.single()
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Link {link_id} ikke funnet")
+    return _format_link(dict(record))
+
+
+async def db_delete_investigation_link(session, link_id: str) -> bool:
+    query = """
+        MATCH ()-[r:INVESTIGATION_LINK]->()
+        WHERE elementId(r) = $link_id
+        DELETE r
+        RETURN count(r) AS deleted
+    """
+    result = await session.run(query, link_id=link_id)
+    record = await result.single()
+    return bool(record and record["deleted"] > 0)
+
+
+async def db_get_co_persons(session, personID: str) -> list[dict]:
+    """
+    Finner alle andre personer som er koblet til de samme firmaene som personID.
+    Viser også antall eksisterende investigation links mellom dem.
+    Nyttig for å se hvem man kan koble til.
+    """
+    query = """
+        MATCH (p:Person {personID: $personID})
+              -[:IS_INTERESTED_PARTY]->(:OOCStatement)
+              -[:DESCRIBES_OWNERSHIP|DESCRIBES_CONTROL]->(e:Entity)
+              <-[:DESCRIBES_OWNERSHIP|DESCRIBES_CONTROL]-(:OOCStatement)
+              <-[:IS_INTERESTED_PARTY]-(other:Person)
+        WHERE other.personID <> $personID
+        WITH DISTINCT other, e, p
+
+        OPTIONAL MATCH (p)-[r:INVESTIGATION_LINK]->(other)
+        OPTIONAL MATCH (other)-[r2:INVESTIGATION_LINK]->(p)
+
+        RETURN
+            other.personID                   AS personID,
+            other.fullName                   AS fullName,
+            collect(DISTINCT e.entityID)     AS sharedEntityIDs,
+            collect(DISTINCT e.name)         AS sharedEntityNames,
+            count(DISTINCT r) + count(DISTINCT r2) AS existingLinkCount
+        ORDER BY existingLinkCount DESC, other.fullName
+    """
+    result = await session.run(query, personID=personID)
+    return await result.data()
 
 # =========================================================
 # 🔒 PROTECTED ENDPOINTS — BASIS
@@ -699,7 +968,7 @@ async def entity_details_endpoint(
     return data
 
 # =========================================================
-# 🔒 PROTECTED ENDPOINTS — TILKOBLINGER
+# 🔒 PROTECTED ENDPOINTS — OOC TILKOBLINGER
 # =========================================================
 
 @app.get(
@@ -714,12 +983,8 @@ async def person_connections(
     session=Depends(get_session),
 ):
     """
-    Returnerer to lister for en person:
-    - **owns**: selskaper personen eier, med eierandeler fra OOCStatement
-    - **controls**: selskaper personen kontrollerer (kan være tom liste)
-
-    Graf-sti:
-    `Person -[:IS_INTERESTED_PARTY]-> OOCStatement -[:DESCRIBES_OWNERSHIP / :DESCRIBES_CONTROL]-> Entity`
+    - **owns**: selskaper personen eier, med eierandeler
+    - **controls**: selskaper personen kontrollerer
     """
     data = await get_person_connections(session, personID)
     if not data:
@@ -740,18 +1005,178 @@ async def entity_connections(
     session=Depends(get_session),
 ):
     """
-    Returnerer to lister for et selskap:
-    - **ownership**: alle som eier selskapet (person eller annet selskap), med andeler
-    - **control**: alle som kontrollerer selskapet (person eller annet selskap)
-
-    Graf-sti:
-    `Person/Entity -[:IS_INTERESTED_PARTY]-> OOCStatement -[:DESCRIBES_OWNERSHIP / :DESCRIBES_CONTROL]-> Entity`
+    - **ownership**: alle som eier selskapet (person eller annet selskap)
+    - **control**: alle som kontrollerer selskapet
     """
     data = await get_entity_connections(session, entityID)
     if not data:
         raise HTTPException(status_code=404, detail="Entity not found")
     logging.getLogger(user).info(f"Entity connections queried: {entityID}")
     return data
+
+# =========================================================
+# 🔒 PROTECTED ENDPOINTS — ETTERFORSKNINGSRELASJONER
+#
+# Ny relasjonstype i Neo4j:
+#   (Person)-[:INVESTIGATION_LINK {
+#       sharedEntityID, tag, note,
+#       created_by, created_at,
+#       expires_at,               ← midlertidig støtte
+#       updated_by?, updated_at?
+#   }]->(Person)
+#
+# Validering ved opprettelse:
+#   Begge Person-noder må nå firma via OOC-grafen:
+#   Person -[IS_INTERESTED_PARTY]-> OOCStatement
+#          -[DESCRIBES_OWNERSHIP|DESCRIBES_CONTROL]-> Entity
+# =========================================================
+
+@app.post(
+    "/investigation/links",
+    tags=["Investigation"],
+    response_model=InvestigationLinkResponse,
+    status_code=201,
+    summary="Opprett etterforskningsrelasjon mellom to personer",
+)
+async def create_investigation_link(
+    body: InvestigationLinkCreate,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Oppretter en `INVESTIGATION_LINK` direkte mellom to Person-noder.
+
+    **Validering**: Begge personene må allerede være koblet til `sharedEntityID`
+    via OOC-grafen (eierskap eller kontroll).
+
+    **Tag**: `#` legges til automatisk om det mangler (`hvitvasking` → `#hvitvasking`).
+
+    **Midlertidig kobling**: Sett `expires_at` for å markere relasjonen som
+    tidsbegrenset. Feltet `is_expired` settes automatisk til `true` i responsen
+    når datoen er passert — Neo4j-noden slettes ikke automatisk, men kan
+    ryddes opp med en planlagt jobb eller via DELETE-endepunktet.
+    """
+    result = await db_create_investigation_link(session, body, created_by=user)
+    logging.getLogger(user).info(
+        f"Investigation link created: {body.fromPersonID} → {body.toPersonID} "
+        f"via {body.sharedEntityID} tag={result['tag']}"
+    )
+    return result
+
+
+@app.get(
+    "/investigation/links/person/{personID}",
+    tags=["Investigation"],
+    response_model=list[InvestigationLinkResponse],
+    summary="Hent etterforskningsrelasjoner for en person",
+)
+async def get_links_for_person(
+    personID: str,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Returnerer alle `INVESTIGATION_LINK`-relasjoner der personen er kilde **eller** mål.
+    Utløpte koblinger inkluderes med `is_expired: true`.
+    """
+    data = await db_get_links_for_person(session, personID)
+    logging.getLogger(user).info(
+        f"Investigation links queried for person: {personID} → {len(data)} treff"
+    )
+    return data
+
+
+@app.get(
+    "/investigation/links/entity/{entityID}",
+    tags=["Investigation"],
+    response_model=list[InvestigationLinkResponse],
+    summary="Hent alle etterforskningskoblinger rundt et firma",
+)
+async def get_links_for_entity(
+    entityID: str,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Returnerer alle `INVESTIGATION_LINK`-relasjoner der `sharedEntityID` matcher
+    firmaet. Gir et samlet bilde av alle koblede personpar rundt ett selskap.
+    """
+    data = await db_get_links_for_entity(session, entityID)
+    logging.getLogger(user).info(
+        f"Investigation links queried for entity: {entityID} → {len(data)} treff"
+    )
+    return data
+
+
+@app.get(
+    "/investigation/links/person/{personID}/co-persons",
+    tags=["Investigation"],
+    summary="Finn andre personer koblet til samme firma(er)",
+)
+async def get_co_persons(
+    personID: str,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Finner alle andre Person-noder koblet til de samme firmaene som `personID`
+    via OOC-grafen. Nyttig for å velge hvem man vil opprette en kobling mot.
+
+    Returnerer per person:
+    - `personID`, `fullName`
+    - `sharedEntityIDs` / `sharedEntityNames` — felles firma
+    - `existingLinkCount` — eksisterende investigation links mellom dem
+    """
+    data = await db_get_co_persons(session, personID)
+    logging.getLogger(user).info(
+        f"Co-persons queried for: {personID} → {len(data)} treff"
+    )
+    return data
+
+
+@app.patch(
+    "/investigation/links/{link_id}",
+    tags=["Investigation"],
+    response_model=InvestigationLinkResponse,
+    summary="Oppdater tag, notat eller utløpsdato",
+)
+async def update_investigation_link(
+    link_id: str,
+    body: InvestigationLinkUpdate,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Oppdaterer ett eller flere felt på en eksisterende `INVESTIGATION_LINK`.
+    Felt som **ikke** er med i body forblir uendret.
+
+    `link_id` er Neo4j `elementId` på relasjonen — returnert ved opprettelse.
+    """
+    result = await db_update_investigation_link(session, link_id, body, updated_by=user)
+    logging.getLogger(user).info(f"Investigation link updated: {link_id}")
+    return result
+
+
+@app.delete(
+    "/investigation/links/{link_id}",
+    tags=["Investigation"],
+    status_code=200,
+    summary="Slett en etterforskningskobling",
+)
+async def delete_investigation_link(
+    link_id: str,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Sletter `INVESTIGATION_LINK`-relasjonen permanent fra Neo4j.
+    Person-nodene og OOC-grafen er uberørt.
+    """
+    deleted = await db_delete_investigation_link(session, link_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Link {link_id} ikke funnet")
+    logging.getLogger(user).info(f"Investigation link deleted: {link_id}")
+    return {"msg": f"Link {link_id} slettet"}
 
 # =========================================================
 # ❤️ HEALTH CHECK
