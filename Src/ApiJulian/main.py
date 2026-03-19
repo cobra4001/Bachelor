@@ -33,7 +33,6 @@ def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
 
-    # Opprett tabell hvis den ikke finnes
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
@@ -45,7 +44,6 @@ def init_db():
 
     conn.commit()
 
-    # Seed admin-bruker hvis den ikke finnes
     import os
     admin_password = os.getenv("ADMIN_PASSWORD", "Admin1234!")
     admin_password = admin_password[:MAX_BCRYPT_LENGTH]
@@ -215,7 +213,7 @@ async def get_current_admin(user: str = Depends(get_current_user)) -> str:
 # 🔐 AUTH ENDPOINTS
 # =========================================================
 
-@app.post("/register", tags =["Register"])
+@app.post("/register", tags=["Register"])
 def register(user: UserRegister):
     try:
         create_user(user.username, user.password)
@@ -303,7 +301,7 @@ def update_user(
     return {"msg": f"Password for '{username}' updated successfully"}
 
 # =========================================================
-# 📦 RESPONSE MODELS
+# 📦 RESPONSE MODELS — PERSON OG ENTITY (BASIS)
 # =========================================================
 
 class KnownPersonResponse(BaseModel):
@@ -334,6 +332,74 @@ class EntityDetailResponse(BaseModel):
     dissolutionDate: Optional[str] = None
 
 # =========================================================
+# 📦 RESPONSE MODELS — TILKOBLINGER
+# =========================================================
+
+class OwnershipEntry(BaseModel):
+    entityID: str
+    name: Optional[str] = None
+    entityType: Optional[str] = None
+    statementID: Optional[str] = None
+    statementDate: Optional[str] = None
+    interest_type: Optional[str] = None
+    share_exact: Optional[float] = None
+    share_minimum: Optional[float] = None
+    share_maximum: Optional[float] = None
+    share_exclusiveMinimum: Optional[bool] = None
+    share_exclusiveMaximum: Optional[bool] = None
+    details: Optional[str] = None
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+
+class ControlEntry(BaseModel):
+    entityID: str
+    name: Optional[str] = None
+    entityType: Optional[str] = None
+    statementID: Optional[str] = None
+    statementDate: Optional[str] = None
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+
+class PersonConnectionsResponse(BaseModel):
+    personID: str
+    fullName: Optional[str] = None
+    owns: list[OwnershipEntry] = []     # Kan være tom liste
+    controls: list[ControlEntry] = []  # Kan være tom liste
+
+class OwnerEntry(BaseModel):
+    personID: Optional[str] = None
+    entityID: Optional[str] = None     # Satt hvis eier er et selskap
+    fullName: Optional[str] = None
+    name: Optional[str] = None
+    statementID: Optional[str] = None
+    statementDate: Optional[str] = None
+    interest_type: Optional[str] = None
+    share_exact: Optional[float] = None
+    share_minimum: Optional[float] = None
+    share_maximum: Optional[float] = None
+    share_exclusiveMinimum: Optional[bool] = None
+    share_exclusiveMaximum: Optional[bool] = None
+    details: Optional[str] = None
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+
+class ControllerEntry(BaseModel):
+    personID: Optional[str] = None
+    entityID: Optional[str] = None     # Satt hvis kontrollant er et selskap
+    fullName: Optional[str] = None
+    name: Optional[str] = None
+    statementID: Optional[str] = None
+    statementDate: Optional[str] = None
+    startDate: Optional[str] = None
+    endDate: Optional[str] = None
+
+class EntityConnectionsResponse(BaseModel):
+    entityID: str
+    name: Optional[str] = None
+    ownership: list[OwnerEntry] = []    # Hvem eier selskapet
+    control: list[ControllerEntry] = [] # Hvem kontrollerer selskapet
+
+# =========================================================
 # 🧠 DB SESSION
 # =========================================================
 
@@ -342,7 +408,7 @@ async def get_session():
         yield session
 
 # =========================================================
-# 🧾 CYPHER FUNCTIONS
+# 🧾 CYPHER FUNKSJONER — BASIS
 # =========================================================
 
 async def check_known_person(session, personID: str):
@@ -405,7 +471,187 @@ async def get_entity_details(session, entityID: str):
     return dict(record)
 
 # =========================================================
-# 🔒 PROTECTED ENDPOINTS
+# 🧾 CYPHER FUNKSJONER — TILKOBLINGER
+#
+# Graf-sti:
+#   Person/Entity -[:IS_INTERESTED_PARTY]->
+#   OOCStatement  -[:DESCRIBES_OWNERSHIP / :DESCRIBES_CONTROL]->
+#   Entity
+# =========================================================
+
+async def get_person_connections(session, personID: str):
+    """Hva en person eier og kontrollerer via OOCStatement."""
+
+    person_query = """
+        MATCH (p:Person {personID: $personID})
+        RETURN p.personID AS personID, p.fullName AS fullName
+    """
+
+    owns_query = """
+        MATCH (p:Person {personID: $personID})
+              -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
+              -[r:DESCRIBES_OWNERSHIP]->(e:Entity)
+        RETURN
+            e.entityID               AS entityID,
+            e.name                   AS name,
+            e.entityType             AS entityType,
+            os.statementID           AS statementID,
+            os.statementDate         AS statementDate,
+            r.type                   AS interest_type,
+            r.share_exact            AS share_exact,
+            r.share_minimum          AS share_minimum,
+            r.share_maximum          AS share_maximum,
+            r.share_exclusiveMinimum AS share_exclusiveMinimum,
+            r.share_exclusiveMaximum AS share_exclusiveMaximum,
+            r.details                AS details,
+            r.startDate              AS startDate,
+            r.endDate                AS endDate
+        ORDER BY r.share_exact DESC
+    """
+
+    controls_query = """
+        MATCH (p:Person {personID: $personID})
+              -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
+              -[r:DESCRIBES_CONTROL]->(e:Entity)
+        RETURN
+            e.entityID       AS entityID,
+            e.name           AS name,
+            e.entityType     AS entityType,
+            os.statementID   AS statementID,
+            os.statementDate AS statementDate,
+            r.startDate      AS startDate,
+            r.endDate        AS endDate
+    """
+
+    person_result = await session.run(person_query, personID=personID)
+    person_record = await person_result.single()
+    if not person_record:
+        return None
+
+    owns_result  = await session.run(owns_query,     personID=personID)
+    owns_records = await owns_result.data()
+
+    ctrl_result  = await session.run(controls_query, personID=personID)
+    ctrl_records = await ctrl_result.data()
+
+    return {
+        "personID": person_record["personID"],
+        "fullName": person_record["fullName"],
+        "owns":     owns_records,
+        "controls": ctrl_records,
+    }
+
+
+async def get_entity_connections(session, entityID: str):
+    """
+    Hvem eier og kontrollerer et selskap.
+    Interessenten kan være Person ELLER Entity (selskap eier selskap).
+    """
+
+    entity_query = """
+        MATCH (e:Entity {entityID: $entityID})
+        RETURN e.entityID AS entityID, e.name AS name
+    """
+
+    # --- Eiere: person interessent ---
+    ownership_person_query = """
+        MATCH (p:Person)
+              -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
+              -[r:DESCRIBES_OWNERSHIP]->(e:Entity {entityID: $entityID})
+        RETURN
+            p.personID               AS personID,
+            null                     AS entityID,
+            p.fullName               AS fullName,
+            null                     AS name,
+            os.statementID           AS statementID,
+            os.statementDate         AS statementDate,
+            r.type                   AS interest_type,
+            r.share_exact            AS share_exact,
+            r.share_minimum          AS share_minimum,
+            r.share_maximum          AS share_maximum,
+            r.share_exclusiveMinimum AS share_exclusiveMinimum,
+            r.share_exclusiveMaximum AS share_exclusiveMaximum,
+            r.details                AS details,
+            r.startDate              AS startDate,
+            r.endDate                AS endDate
+        ORDER BY r.share_exact DESC
+    """
+
+    # --- Eiere: entity interessent (selskap eier selskap) ---
+    ownership_entity_query = """
+        MATCH (owner:Entity)
+              -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
+              -[r:DESCRIBES_OWNERSHIP]->(e:Entity {entityID: $entityID})
+        RETURN
+            null                     AS personID,
+            owner.entityID           AS entityID,
+            null                     AS fullName,
+            owner.name               AS name,
+            os.statementID           AS statementID,
+            os.statementDate         AS statementDate,
+            r.type                   AS interest_type,
+            r.share_exact            AS share_exact,
+            r.share_minimum          AS share_minimum,
+            r.share_maximum          AS share_maximum,
+            r.share_exclusiveMinimum AS share_exclusiveMinimum,
+            r.share_exclusiveMaximum AS share_exclusiveMaximum,
+            r.details                AS details,
+            r.startDate              AS startDate,
+            r.endDate                AS endDate
+        ORDER BY r.share_exact DESC
+    """
+
+    # --- Kontrollanter: person ---
+    control_person_query = """
+        MATCH (p:Person)
+              -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
+              -[r:DESCRIBES_CONTROL]->(e:Entity {entityID: $entityID})
+        RETURN
+            p.personID       AS personID,
+            null             AS entityID,
+            p.fullName       AS fullName,
+            null             AS name,
+            os.statementID   AS statementID,
+            os.statementDate AS statementDate,
+            r.startDate      AS startDate,
+            r.endDate        AS endDate
+    """
+
+    # --- Kontrollanter: entity ---
+    control_entity_query = """
+        MATCH (owner:Entity)
+              -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
+              -[r:DESCRIBES_CONTROL]->(e:Entity {entityID: $entityID})
+        RETURN
+            null             AS personID,
+            owner.entityID   AS entityID,
+            null             AS fullName,
+            owner.name       AS name,
+            os.statementID   AS statementID,
+            os.statementDate AS statementDate,
+            r.startDate      AS startDate,
+            r.endDate        AS endDate
+    """
+
+    entity_result = await session.run(entity_query, entityID=entityID)
+    entity_record = await entity_result.single()
+    if not entity_record:
+        return None
+
+    own_p  = await (await session.run(ownership_person_query, entityID=entityID)).data()
+    own_e  = await (await session.run(ownership_entity_query, entityID=entityID)).data()
+    ctrl_p = await (await session.run(control_person_query,   entityID=entityID)).data()
+    ctrl_e = await (await session.run(control_entity_query,   entityID=entityID)).data()
+
+    return {
+        "entityID":  entity_record["entityID"],
+        "name":      entity_record["name"],
+        "ownership": own_p + own_e,
+        "control":   ctrl_p + ctrl_e,
+    }
+
+# =========================================================
+# 🔒 PROTECTED ENDPOINTS — BASIS
 # =========================================================
 
 @app.get("/Person/{personID}/known", tags=["Person"], response_model=KnownPersonResponse)
@@ -450,6 +696,61 @@ async def entity_details_endpoint(
     data = await get_entity_details(session, entityID)
     if not data:
         raise HTTPException(status_code=404, detail="Entity not found")
+    return data
+
+# =========================================================
+# 🔒 PROTECTED ENDPOINTS — TILKOBLINGER
+# =========================================================
+
+@app.get(
+    "/Person/{personID}/connections",
+    tags=["Person"],
+    response_model=PersonConnectionsResponse,
+    summary="Hva personen eier og kontrollerer",
+)
+async def person_connections(
+    personID: str,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Returnerer to lister for en person:
+    - **owns**: selskaper personen eier, med eierandeler fra OOCStatement
+    - **controls**: selskaper personen kontrollerer (kan være tom liste)
+
+    Graf-sti:
+    `Person -[:IS_INTERESTED_PARTY]-> OOCStatement -[:DESCRIBES_OWNERSHIP / :DESCRIBES_CONTROL]-> Entity`
+    """
+    data = await get_person_connections(session, personID)
+    if not data:
+        raise HTTPException(status_code=404, detail="Person not found")
+    logging.getLogger(user).info(f"Person connections queried: {personID}")
+    return data
+
+
+@app.get(
+    "/Entity/{entityID}/connections",
+    tags=["Entity"],
+    response_model=EntityConnectionsResponse,
+    summary="Hvem eier og kontrollerer selskapet",
+)
+async def entity_connections(
+    entityID: str,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Returnerer to lister for et selskap:
+    - **ownership**: alle som eier selskapet (person eller annet selskap), med andeler
+    - **control**: alle som kontrollerer selskapet (person eller annet selskap)
+
+    Graf-sti:
+    `Person/Entity -[:IS_INTERESTED_PARTY]-> OOCStatement -[:DESCRIBES_OWNERSHIP / :DESCRIBES_CONTROL]-> Entity`
+    """
+    data = await get_entity_connections(session, entityID)
+    if not data:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    logging.getLogger(user).info(f"Entity connections queried: {entityID}")
     return data
 
 # =========================================================
