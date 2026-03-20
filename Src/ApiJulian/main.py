@@ -167,8 +167,8 @@ app = FastAPI(
 
 ### Graf-logikk for eierskap og kontroll
 ```
-Person/Enhet -[IS_INTERESTED_PARTY]-> OOCStatement -[DESCRIBES_OWNERSHIP]-> Enhet
-Person/Enhet -[IS_INTERESTED_PARTY]-> OOCStatement -[DESCRIBES_CONTROL]-> Enhet
+Person/Entity -[IS_INTERESTED_PARTY]-> OOCStatement -[DESCRIBES_OWNERSHIP]-> Entity
+Person/Entity -[IS_INTERESTED_PARTY]-> OOCStatement -[DESCRIBES_CONTROL]-> Entity
 ```
 
 ### Graf-logikk for etterforskningsrelasjoner
@@ -375,12 +375,12 @@ class PersonDetaljerSvar(BaseModel):
     personType: Optional[str] = None
 
 
-class RegistrertEnhetSvar(BaseModel):
+class RegistrertEntitySvar(BaseModel):
     entityID: str
     is_registered_entity: bool
 
 
-class EnhetDetaljerSvar(BaseModel):
+class EntityDetaljerSvar(BaseModel):
     entityID: str
     name: Optional[str] = None
     alternateNames: Optional[str] = None
@@ -429,7 +429,7 @@ class PersonTilkoblingerSvar(BaseModel):
     controls: list[KontrolloppføringModell] = []
 
 
-class EieroppføringModell(BaseModel):
+class EierEntityModell(BaseModel):
     personID: Optional[str] = None
     entityID: Optional[str] = None
     fullName: Optional[str] = None
@@ -447,7 +447,7 @@ class EieroppføringModell(BaseModel):
     endDate: Optional[str] = None
 
 
-class KontrolløroppføringModell(BaseModel):
+class KontrollørEntityModell(BaseModel):
     personID: Optional[str] = None
     entityID: Optional[str] = None
     fullName: Optional[str] = None
@@ -458,11 +458,11 @@ class KontrolløroppføringModell(BaseModel):
     endDate: Optional[str] = None
 
 
-class EnhetTilkoblingerSvar(BaseModel):
+class EntityTilkoblingerSvar(BaseModel):
     entityID: str
     name: Optional[str] = None
-    ownership: list[EieroppføringModell] = []
-    control: list[KontrolløroppføringModell] = []
+    ownership: list[EierEntityModell] = []
+    control: list[KontrollørEntityModell] = []
 
 
 # =========================================================
@@ -588,7 +588,7 @@ async def hent_person_detaljer(session, personID: str):
     return dict(rad)
 
 
-async def sjekk_registrert_enhet(session, entityID: str):
+async def sjekk_registrert_entity(session, entityID: str):
     """Sjekker om en Entity-node med gitt entityID finnes i grafen."""
     sporring = """
     MATCH (e:Entity {entityID: $entityID})
@@ -602,7 +602,7 @@ async def sjekk_registrert_enhet(session, entityID: str):
     return dict(rad)
 
 
-async def hent_enhet_detaljer(session, entityID: str):
+async def hent_entity_detaljer(session, entityID: str):
     """Henter alle detaljfelt for en Entity-node."""
     sporring = """
     MATCH (e:Entity {entityID: $entityID})
@@ -682,9 +682,9 @@ async def hent_person_tilkoblinger(session, personID: str):
     }
 
 
-async def hent_enhet_tilkoblinger(session, entityID: str):
-    """Henter alle eiere og kontrollører for en enhet via OOC-grafen."""
-    enhet_sporring = """
+async def hent_entity_tilkoblinger(session, entityID: str):
+    """Henter alle eiere og kontrollører for en Entity via OOC-grafen."""
+    entity_sporring = """
         MATCH (e:Entity {entityID: $entityID})
         RETURN e.entityID AS entityID, e.name AS name
     """
@@ -703,7 +703,7 @@ async def hent_enhet_tilkoblinger(session, entityID: str):
             r.details AS details, r.startDate AS startDate, r.endDate AS endDate
         ORDER BY r.share_exact DESC
     """
-    eierskap_enhet_sporring = """
+    eierskap_entity_sporring = """
         MATCH (eier:Entity)
               -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
               -[r:DESCRIBES_OWNERSHIP]->(e:Entity {entityID: $entityID})
@@ -728,7 +728,7 @@ async def hent_enhet_tilkoblinger(session, entityID: str):
             os.statementID AS statementID, os.statementDate AS statementDate,
             r.startDate AS startDate, r.endDate AS endDate
     """
-    kontroll_enhet_sporring = """
+    kontroll_entity_sporring = """
         MATCH (eier:Entity)
               -[:IS_INTERESTED_PARTY]->(os:OOCStatement)
               -[r:DESCRIBES_CONTROL]->(e:Entity {entityID: $entityID})
@@ -738,17 +738,17 @@ async def hent_enhet_tilkoblinger(session, entityID: str):
             os.statementID AS statementID, os.statementDate AS statementDate,
             r.startDate AS startDate, r.endDate AS endDate
     """
-    enhet_resultat = await session.run(enhet_sporring, entityID=entityID)
-    enhet_rad = await enhet_resultat.single()
-    if not enhet_rad:
+    entity_resultat = await session.run(entity_sporring, entityID=entityID)
+    entity_rad = await entity_resultat.single()
+    if not entity_rad:
         return None
     eier_p  = await (await session.run(eierskap_person_sporring, entityID=entityID)).data()
-    eier_e  = await (await session.run(eierskap_enhet_sporring,  entityID=entityID)).data()
+    eier_e  = await (await session.run(eierskap_entity_sporring,  entityID=entityID)).data()
     ctrl_p  = await (await session.run(kontroll_person_sporring, entityID=entityID)).data()
-    ctrl_e  = await (await session.run(kontroll_enhet_sporring,  entityID=entityID)).data()
+    ctrl_e  = await (await session.run(kontroll_entity_sporring,  entityID=entityID)).data()
     return {
-        "entityID":  enhet_rad["entityID"],
-        "name":      enhet_rad["name"],
+        "entityID":  entity_rad["entityID"],
+        "name":      entity_rad["name"],
         "ownership": eier_p + eier_e,
         "control":   ctrl_p + ctrl_e,
     }
@@ -891,8 +891,8 @@ async def db_hent_koblinger_for_person(session, personID: str) -> list[dict]:
     return [_formater_kobling(r) for r in rader]
 
 
-async def db_hent_koblinger_for_enhet(session, entityID: str) -> list[dict]:
-    """Henter alle INVESTIGATION_LINK mellom personer koblet til et bestemt firma."""
+async def db_hent_koblinger_for_entity(session, entityID: str) -> list[dict]:
+    """Henter alle INVESTIGATION_LINK mellom personer koblet til et bestemt Entity."""
     sporring = """
         MATCH (fraP:Person)-[r:INVESTIGATION_LINK]->(tilP:Person)
         WHERE r.sharedEntityID = $entityID
@@ -1013,7 +1013,7 @@ async def db_hent_mede_personer(session, personID: str) -> list[dict]:
 # 🧾 CYPHER-FUNKSJON — MASSEKOBLING
 # =========================================================
 
-async def db_masskoblinger_for_enhet(
+async def db_masskoblinger_for_entity(
     session,
     entityID: str,
     body: MassekoblingOpprett,
@@ -1038,9 +1038,9 @@ async def db_masskoblinger_for_enhet(
     rad = await resultat.single()
 
     if not rad or not rad["entityID"]:
-        raise HTTPException(status_code=404, detail=f"Enhet {entityID} ble ikke funnet")
+        raise HTTPException(status_code=404, detail=f"Entity {entityID} ble ikke funnet")
 
-    # Filtrerer bort None-oppføringer (enhet uten tilknyttede personer)
+    # Filtrerer bort None-oppføringer (entity uten tilknyttede personer)
     personer = [p for p in rad["personer"] if p["personID"] is not None]
 
     if len(personer) < 2:
@@ -1167,29 +1167,29 @@ async def person_detaljer_endepunkt(
     return data
 
 
-@app.get("/Entity/{entityID}/registrert", tags=["Enhet"], response_model=RegistrertEnhetSvar)
-async def er_registrert_enhet(
+@app.get("/Entity/{entityID}/registrert", tags=["Entity"], response_model=RegistrertEntitySvar)
+async def er_registrert_entity(
     entityID: str,
     bruker: str = Depends(hent_innlogget_bruker),
     session=Depends(hent_okt)
 ):
-    """Sjekker om en enhet med gitt entityID finnes i grafen."""
-    data = await sjekk_registrert_enhet(session, entityID)
+    """Sjekker om en Entity med gitt entityID finnes i grafen."""
+    data = await sjekk_registrert_entity(session, entityID)
     if not data:
-        raise HTTPException(status_code=404, detail="Enhet ble ikke funnet")
+        raise HTTPException(status_code=404, detail="Entity ble ikke funnet")
     return data
 
 
-@app.get("/Entity/{entityID}/detaljer", tags=["Enhet"], response_model=EnhetDetaljerSvar)
-async def enhet_detaljer_endepunkt(
+@app.get("/Entity/{entityID}/detaljer", tags=["Entity"], response_model=EntityDetaljerSvar)
+async def entity_detaljer_endepunkt(
     entityID: str,
     bruker: str = Depends(hent_innlogget_bruker),
     session=Depends(hent_okt)
 ):
-    """Returnerer alle detaljfelt for en enhet."""
-    data = await hent_enhet_detaljer(session, entityID)
+    """Returnerer alle detaljfelt for en Entity."""
+    data = await hent_entity_detaljer(session, entityID)
     if not data:
-        raise HTTPException(status_code=404, detail="Enhet ble ikke funnet")
+        raise HTTPException(status_code=404, detail="Entity ble ikke funnet")
     return data
 
 
@@ -1221,11 +1221,11 @@ async def person_tilkoblinger(
 
 @app.get(
     "/Entity/{entityID}/tilkoblinger",
-    tags=["Enhet"],
-    response_model=EnhetTilkoblingerSvar,
+    tags=["Entity"],
+    response_model=EntityTilkoblingerSvar,
     summary="Hvem eier og kontrollerer selskapet",
 )
-async def enhet_tilkoblinger(
+async def entity_tilkoblinger(
     entityID: str,
     bruker: str = Depends(hent_innlogget_bruker),
     session=Depends(hent_okt),
@@ -1234,10 +1234,10 @@ async def enhet_tilkoblinger(
     - **ownership**: alle som eier selskapet (person eller annet selskap)
     - **control**: alle som kontrollerer selskapet
     """
-    data = await hent_enhet_tilkoblinger(session, entityID)
+    data = await hent_entity_tilkoblinger(session, entityID)
     if not data:
-        raise HTTPException(status_code=404, detail="Enhet ble ikke funnet")
-    logging.getLogger(bruker).info(f"Enhettilkoblinger hentet: {entityID}")
+        raise HTTPException(status_code=404, detail="Entity ble ikke funnet")
+    logging.getLogger(bruker).info(f"Entity-tilkoblinger hentet: {entityID}")
     return data
 
 
@@ -1291,13 +1291,13 @@ async def opprett_etterforskningskobling(
 
 
 @app.post(
-    "/etterforskning/koblinger/enhet/{entityID}/masse",
+    "/etterforskning/koblinger/entity/{entityID}/masse",
     tags=["Etterforskning"],
     response_model=MassekoblingSvar,
     status_code=201,
     summary="Koble alle personer tilknyttet et firma med én felles tag",
 )
-async def massekoblinger_for_enhet(
+async def massekoblinger_for_entity(
     entityID: str,
     body: MassekoblingOpprett,
     bruker: str = Depends(hent_innlogget_bruker),
@@ -1317,9 +1317,9 @@ async def massekoblinger_for_enhet(
     - **antall_hoppet_over**: antall par som ble hoppet over
     - **involverte_personer**: liste over alle personID-er som inngår
     """
-    resultat = await db_masskoblinger_for_enhet(session, entityID, body, opprettet_av=bruker)
+    resultat = await db_masskoblinger_for_entity(session, entityID, body, opprettet_av=bruker)
     logging.getLogger(bruker).info(
-        f"Masskoblinger opprettet for enhet: {entityID} "
+        f"Masskoblinger opprettet for entity: {entityID} "
         f"tag={resultat['tag']} opprettet={resultat['antall_opprettet']} "
         f"hoppet_over={resultat['antall_hoppet_over']}"
     )
@@ -1349,12 +1349,12 @@ async def hent_koblinger_for_person(
 
 
 @app.get(
-    "/etterforskning/koblinger/enhet/{entityID}",
+    "/etterforskning/koblinger/entity/{entityID}",
     tags=["Etterforskning"],
     response_model=list[EtterforskningskoblingSvar],
     summary="Hent alle etterforskningskoblinger rundt et firma",
 )
-async def hent_koblinger_for_enhet(
+async def hent_koblinger_for_entity(
     entityID: str,
     bruker: str = Depends(hent_innlogget_bruker),
     session=Depends(hent_okt),
@@ -1363,9 +1363,9 @@ async def hent_koblinger_for_enhet(
     Returnerer alle `INVESTIGATION_LINK`-relasjoner der `sharedEntityID` matcher
     firmaet. Gir et samlet bilde av alle koblede personpar rundt ett selskap.
     """
-    data = await db_hent_koblinger_for_enhet(session, entityID)
+    data = await db_hent_koblinger_for_entity(session, entityID)
     logging.getLogger(bruker).info(
-        f"Etterforskningskoblinger hentet for enhet: {entityID} -> {len(data)} treff"
+        f"Etterforskningskoblinger hentet for entity: {entityID} -> {len(data)} treff"
     )
     return data
 
