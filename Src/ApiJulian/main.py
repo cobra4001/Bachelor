@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from typing import Optional
 from jose import JWTError, jwt
 from datetime import datetime, timedelta
+from itertools import combinations
 import logging
 from pathlib import Path
 import sqlite3
@@ -467,6 +468,34 @@ class InvestigationLinkUpdate(BaseModel):
     expires_at: Optional[str] = None
 
 # =========================================================
+# 📦 RESPONSE MODELS — BULK KOBLING
+# =========================================================
+
+class BulkLinkCreate(BaseModel):
+    """
+    Body for å masseknytte alle personer tilknyttet et firma.
+
+    - **tag**: hashtag-etikett for saken, f.eks. '#sak-2024-42' eller '#korrupsjon'
+    - **note**: valgfri fritekst som settes på alle koblingene
+    - **expires_at**: ISO-dato for utløp (None = permanent)
+    - **skip_existing**: hopp over par som allerede har en kobling med samme tag
+                         og sharedEntityID (default: true)
+    """
+    tag: str
+    note: Optional[str] = None
+    expires_at: Optional[str] = None
+    skip_existing: bool = True
+
+class BulkLinkResponse(BaseModel):
+    entityID: str
+    entityName: Optional[str] = None
+    tag: str
+    created_count: int
+    skipped_count: int
+    persons_involved: list[str]
+    links: list[InvestigationLinkResponse]
+
+# =========================================================
 # 🧠 DB SESSION
 # =========================================================
 
@@ -919,6 +948,135 @@ async def db_get_co_persons(session, personID: str) -> list[dict]:
     result = await session.run(query, personID=personID)
     return await result.data()
 
+
+# =========================================================
+# 🧾 CYPHER FUNKSJON — BULK KOBLING
+# =========================================================
+
+async def db_bulk_link_entity_persons(
+    session,
+    entityID: str,
+    body: BulkLinkCreate,
+    created_by: str,
+) -> dict:
+    """
+    Finner alle personer koblet til entityID og oppretter
+    INVESTIGATION_LINK mellom alle unike par (A→B, ikke B→A i tillegg).
+    """
+    # Hent firmainfo + alle tilknyttede personer
+    persons_query = """
+        MATCH (e:Entity {entityID: $entityID})
+        OPTIONAL MATCH (p:Person)
+              -[:IS_INTERESTED_PARTY]->(:OOCStatement)
+              -[:DESCRIBES_OWNERSHIP|DESCRIBES_CONTROL]->(e)
+        RETURN
+            e.entityID AS entityID,
+            e.name     AS entityName,
+            collect(DISTINCT {personID: p.personID, fullName: p.fullName}) AS persons
+    """
+    result = await session.run(persons_query, entityID=entityID)
+    record = await result.single()
+
+    if not record or not record["entityID"]:
+        raise HTTPException(status_code=404, detail=f"Entity {entityID} ikke funnet")
+
+    # Filtrer ut None-entries (entity uten tilknyttede personer)
+    persons = [p for p in record["persons"] if p["personID"] is not None]
+
+    if len(persons) < 2:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Færre enn 2 personer er koblet til {entityID} — ingen par å koble. "
+                f"Fant {len(persons)} person(er)."
+            )
+        )
+
+    tag = body.tag if body.tag.startswith("#") else f"#{body.tag}"
+    now = datetime.utcnow().isoformat()
+    created_links = []
+    skipped = 0
+
+    # Generer alle unike retningsløse par
+    pairs = list(combinations(persons, 2))
+
+    for fromP, toP in pairs:
+        # Sjekk om kobling med samme tag allerede finnes (begge retninger)
+        if body.skip_existing:
+            check_query = """
+                MATCH (a:Person {personID: $fromID})-[r:INVESTIGATION_LINK]->(b:Person {personID: $toID})
+                WHERE r.tag = $tag AND r.sharedEntityID = $entityID
+                RETURN count(r) AS existing
+                UNION
+                MATCH (a:Person {personID: $toID})-[r:INVESTIGATION_LINK]->(b:Person {personID: $fromID})
+                WHERE r.tag = $tag AND r.sharedEntityID = $entityID
+                RETURN count(r) AS existing
+            """
+            check_result = await session.run(
+                check_query,
+                fromID=fromP["personID"],
+                toID=toP["personID"],
+                tag=tag,
+                entityID=entityID,
+            )
+            check_records = await check_result.data()
+            total_existing = sum(r["existing"] for r in check_records)
+            if total_existing > 0:
+                skipped += 1
+                continue
+
+        create_query = """
+            MATCH (fromP:Person {personID: $fromPersonID})
+            MATCH (toP:Person   {personID: $toPersonID})
+            CREATE (fromP)-[r:INVESTIGATION_LINK {
+                sharedEntityID: $sharedEntityID,
+                tag:            $tag,
+                note:           $note,
+                created_by:     $created_by,
+                created_at:     $created_at,
+                expires_at:     $expires_at
+            }]->(toP)
+            RETURN elementId(r) AS linkID
+        """
+        create_result = await session.run(
+            create_query,
+            fromPersonID=fromP["personID"],
+            toPersonID=toP["personID"],
+            sharedEntityID=entityID,
+            tag=tag,
+            note=body.note,
+            created_by=created_by,
+            created_at=now,
+            expires_at=body.expires_at,
+        )
+        create_record = await create_result.single()
+
+        created_links.append(_format_link({
+            "linkID":           create_record["linkID"],
+            "fromPersonID":     fromP["personID"],
+            "fromPersonName":   fromP["fullName"],
+            "toPersonID":       toP["personID"],
+            "toPersonName":     toP["fullName"],
+            "sharedEntityID":   entityID,
+            "sharedEntityName": record["entityName"],
+            "tag":              tag,
+            "note":             body.note,
+            "created_by":       created_by,
+            "created_at":       now,
+            "expires_at":       body.expires_at,
+        }))
+
+    return {
+        "entityID":         entityID,
+        "entityName":       record["entityName"],
+        "tag":              tag,
+        "created_count":    len(created_links),
+        "skipped_count":    skipped,
+        "persons_involved": [p["personID"] for p in persons],
+        "links":            created_links,
+    }
+
+
 # =========================================================
 # 🔒 PROTECTED ENDPOINTS — BASIS
 # =========================================================
@@ -1017,11 +1175,11 @@ async def entity_connections(
 # =========================================================
 # 🔒 PROTECTED ENDPOINTS — ETTERFORSKNINGSRELASJONER
 #
-# Ny relasjonstype i Neo4j:
+# Relasjonstype i Neo4j:
 #   (Person)-[:INVESTIGATION_LINK {
 #       sharedEntityID, tag, note,
 #       created_by, created_at,
-#       expires_at,               ← midlertidig støtte
+#       expires_at,
 #       updated_by?, updated_at?
 #   }]->(Person)
 #
@@ -1053,13 +1211,47 @@ async def create_investigation_link(
 
     **Midlertidig kobling**: Sett `expires_at` for å markere relasjonen som
     tidsbegrenset. Feltet `is_expired` settes automatisk til `true` i responsen
-    når datoen er passert — Neo4j-noden slettes ikke automatisk, men kan
-    ryddes opp med en planlagt jobb eller via DELETE-endepunktet.
+    når datoen er passert.
     """
     result = await db_create_investigation_link(session, body, created_by=user)
     logging.getLogger(user).info(
         f"Investigation link created: {body.fromPersonID} → {body.toPersonID} "
         f"via {body.sharedEntityID} tag={result['tag']}"
+    )
+    return result
+
+
+@app.post(
+    "/investigation/links/entity/{entityID}/bulk",
+    tags=["Investigation"],
+    response_model=BulkLinkResponse,
+    status_code=201,
+    summary="Koble alle personer tilknyttet et firma med én felles tag",
+)
+async def bulk_link_entity_persons(
+    entityID: str,
+    body: BulkLinkCreate,
+    user: str = Depends(get_current_user),
+    session=Depends(get_session),
+):
+    """
+    Finner **alle personer** koblet til `entityID` via OOC-grafen og oppretter
+    `INVESTIGATION_LINK` mellom samtlige unike par — merket med samme `tag`.
+
+    Nyttig for å samle alle aktører rundt ett selskap under én saksreferanse,
+    f.eks. `#sak-2024-42` eller `#korrupsjon`.
+
+    - **tag**: `#` legges til automatisk om det mangler
+    - **skip_existing** (default `true`): hopper over par som allerede har en
+      kobling med nøyaktig samme `tag` og `sharedEntityID`
+    - **created_count**: antall nye koblinger opprettet
+    - **skipped_count**: antall par som ble hoppet over
+    - **persons_involved**: liste over alle personID-er som inngår
+    """
+    result = await db_bulk_link_entity_persons(session, entityID, body, created_by=user)
+    logging.getLogger(user).info(
+        f"Bulk investigation links created for entity: {entityID} "
+        f"tag={result['tag']} created={result['created_count']} skipped={result['skipped_count']}"
     )
     return result
 
