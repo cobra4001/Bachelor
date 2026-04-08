@@ -1433,6 +1433,8 @@ async def slett_etterforskningskobling(
     """
     Sletter `INVESTIGATION_LINK`-relasjonen permanent fra Neo4j.
     Person-nodene og OOC-grafen er uberørt.
+
+    `link_id` er Neo4j elementId på relasjonen.
     """
     slettet = await db_slett_etterforskningskobling(session, link_id)
     if not slettet:
